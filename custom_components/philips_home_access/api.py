@@ -7,7 +7,7 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-from .const import RSA_HEX_KEY, RSA_PRIVATE_SIGN
+from .const import LOGIN_STATIC_TOKEN, RSA_HEX_KEY, RSA_PRIVATE_SIGN
 
 
 class PhilipsHomeAccessAPI:
@@ -81,7 +81,7 @@ class PhilipsHomeAccessAPI:
             "lang": "en_US",
             "language": "en_US",
             "timestamp": str(int(time.time())),
-            "token": "5+4KiiOY06hCN8wSZG3yAYBI6uXgQHBxc1EsCA3tLSrrRx2IY7ni1F9IloXpOFrY/gzAd/iSbIb9gU54w9ldWzbvtV5jNh4EQWT68zLAtIUv5Sd7P9FT7ddikjnqRojOS/8NtOzoUu9HpUb/kTEKKjPQWD9wHSV6pmESiOMq+kPn/ezdrFM4jWKaTq8U5Yl1E7+d2fXWiDn+UlP4FhdgxlUs0bO9PDQOhlA3pZbDg3n8ouwgF2zFoFMMJTdHbNLHvcMyq7vlN9kqPVq4rSebjg==",
+            "token": LOGIN_STATIC_TOKEN,
             "Content-Type": "application/json; charset=utf-8",
         }
         payload = {
