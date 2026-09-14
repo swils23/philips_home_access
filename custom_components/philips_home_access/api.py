@@ -10,13 +10,57 @@ _LOGGER = logging.getLogger(__name__)
 from .const import LOGIN_STATIC_TOKEN, RSA_HEX_KEY, RSA_PRIVATE_SIGN
 
 
+class PhilipsSessionExpired(Exception):
+    """The account's token was invalidated, usually by a login elsewhere."""
+
+
+class PhilipsAppApiUnavailable(Exception):
+    """A newer "/app/*" endpoint was called before its datacenter host is known.
+
+    The activity, credential (PIN/fingerprint), and sharing features live on a
+    datacenter-specific host that the app resolves at runtime. Until that host
+    is configured on the API object, these methods raise this rather than send a
+    request that cannot succeed. See docs/reverse-engineering-notes.md.
+    """
+
+
+# Candidate keys for the list of records inside an activity response envelope.
+_RECORD_LIST_KEYS = ("list", "records", "rows", "content", "data", "items", "logs")
+
+# Candidate field names when normalising a single activity record. The activity
+# endpoint is undocumented, so each logical field is resolved from the first
+# candidate the record actually carries.
+_RECORD_ID_KEYS = ("recordId", "id", "logId", "eventId", "msgId", "seq")
+_RECORD_TIME_KEYS = (
+    "createTime", "recordTime", "openTime", "operateTime", "eventTime",
+    "gmtCreate", "time", "timestamp", "ts",
+)
+_RECORD_TYPE_KEYS = (
+    "recordType", "eventType", "operateType", "openType", "type", "action",
+    "opType", "msgType",
+)
+_RECORD_USER_KEYS = (
+    "userName", "nickName", "userNickname", "opUser", "operator", "userAlias",
+    "memberName", "userNumberId", "userNumber",
+)
+
+
 class PhilipsHomeAccessAPI:
-    def __init__(self, username, password, region_code):
+    def __init__(self, username, password, region_code, app_host=None):
         self.username = username
         self.password = password
         self.region_code = region_code
         self.token = None
         self.uid = None
+        self.data_center = None
+        self.users_by_region = {}
+        # Base URL for the newer "/app/*" and "/philips/record|secret|share/*"
+        # endpoints (activity, credentials, sharing). These live on a per-
+        # datacenter host that is resolved by the app at runtime and is not a
+        # literal we can hardcode. Until it is known (see
+        # docs/reverse-engineering-notes.md) the app-layer methods raise
+        # PhilipsAppApiUnavailable instead of firing malformed requests.
+        self.app_host = app_host
 
     def _mask(self, value, keep=4):
         if not value:
@@ -119,13 +163,19 @@ class PhilipsHomeAccessAPI:
             raise Exception("unknown_error")
 
         users = data.get("data", {}).get("users", [])
+        # Keep every region entry: each is a separate datacenter with its own
+        # token, and the account-sharing flow may need to look tokens up by
+        # region. Store them keyed by region code.
+        self.users_by_region = {u.get("code"): u for u in users if u.get("code")}
         for user in users:
             if user.get("code") == self.region_code:
                 self.token = user.get("token")
                 self.uid = user.get("uid")
+                self.data_center = user.get("dataCenter")
                 _LOGGER.debug(
-                    "Login success: region=%s uid=%s token_present=%s",
+                    "Login success: region=%s dataCenter=%s uid=%s token_present=%s",
                     self.region_code,
+                    self.data_center,
                     self._mask(self.uid),
                     bool(self.token),
                 )
@@ -157,12 +207,44 @@ class PhilipsHomeAccessAPI:
             _LOGGER.debug("get_devices returned non-JSON response")
             raise
 
-        devices = data.get("data", {}).get("wifiList", [])
+        if isinstance(data, dict) and str(data.get("code")) == "444":
+            _LOGGER.debug("get_devices: session expired (code 444)")
+            raise PhilipsSessionExpired("session_expired")
+
+        devices = self._collect_devices(data.get("data") or {})
         _LOGGER.debug(
-            "get_devices response code=%s device_count=%s",
+            "get_devices response code=%s device_count=%s sources=%s",
             data.get("code"),
             len(devices),
+            sorted({d.get("_sourceList") for d in devices}),
         )
+        return devices
+
+    @staticmethod
+    def _collect_devices(data_block):
+        """Return every device in the payload, whatever key it arrived under.
+
+        Devices the account owns come back under "wifiList". A device shared
+        with the account from someone else's home is grouped under a different
+        key, so reading only "wifiList" makes a shared account look empty.
+        Every list-shaped key is scanned instead, and entries are identified by
+        carrying a "wifiSN" so unrelated lists (banners, rooms) are skipped.
+        """
+        devices = []
+        seen = set()
+        for key, value in data_block.items():
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                esn = item.get("wifiSN")
+                if not esn or esn in seen:
+                    continue
+                seen.add(esn)
+                # Provenance, surfaced in diagnostics to show shared vs owned.
+                item.setdefault("_sourceList", key)
+                devices.append(item)
         return devices
 
     def query_device_attr(self, esn: str):
@@ -382,3 +464,209 @@ class PhilipsHomeAccessAPI:
                 out.get("msg"),
             )
         return out
+    # ------------------------------------------------------------------
+    # Newer "/app/*" API surface: activity, credentials (PIN/fingerprint),
+    # sharing. All of this is gated on `self.app_host` being known. The
+    # endpoints and payload field names below were recovered from the app's
+    # React Native bundle; the exact datacenter host and header set still need
+    # one traffic capture to confirm (docs/reverse-engineering-notes.md).
+    # ------------------------------------------------------------------
+
+    # Discovered endpoints, grouped by feature.
+    APP_ACTIVITY_LATEST = "/app/record/operation/latest"
+    APP_ACTIVITY_LIST = "/app/record/operation/list"
+    APP_ACTIVITY_ALARM = "/app/record/operation/alarm"
+    APP_KEY_CREATE = "/app/iot/ble/device/user/key/create"
+    APP_KEY_UPDATE = "/app/iot/ble/device/user/key/update"
+    APP_KEY_DELETE = "/app/iot/ble/device/user/key/delete"
+    APP_USER_LIST = "/app/iot/ble/device/user/list/"
+    APP_SHARE_ADD = "/app/wifi/share/add"
+    APP_SHARE_DEL = "/app/wifi/share/del"
+    APP_SHARE_LIST = "/app/wifi/share/list"
+    APP_SHARE_RENAME = "/app/wifi/share/updatenickname"
+    APP_SEND_TOKEN = "/app/user/sendToken"
+    APP_CHECK_CODE = "/app/user/checkCode"
+    APP_REGISTER_EMAIL = "/app/user/reg/putuserbyemail"
+
+    def _app_request(self, path, body, sign_fields=None):
+        """POST to an "/app/*" endpoint with the app's signing convention.
+
+        The signature is computed over ``sign_fields`` (a subset of the body, in
+        the given insertion order) rather than the whole body, matching what the
+        bundle does. ``reqTime`` is added to both. Raises
+        PhilipsAppApiUnavailable when the datacenter host is not configured.
+        """
+        if not self.app_host:
+            raise PhilipsAppApiUnavailable(
+                f"app_host not set; cannot call {path}. See "
+                "docs/reverse-engineering-notes.md to resolve it."
+            )
+
+        req_time = str(int(time.time() * 1000))
+        body = dict(body)
+        body["reqTime"] = req_time
+
+        # Sign an insertion-ordered subset (default: the whole body minus sign).
+        sign_obj = {}
+        for field in (sign_fields or list(body.keys())):
+            if field in body:
+                sign_obj[field] = body[field]
+        body["sign"] = self._sign_app(sign_obj)
+
+        url = f"{self.app_host}{path}"
+        headers = {
+            "token": self.token,
+            "k-tenant": "philips",
+            "k-version": "4.11.0",
+            "k-language": "en_US",
+            "k-signv": "1.0.0",
+            "reqSource": "app",
+            "lang": "en_US",
+            "language": "en_US",
+            "timestamp": req_time,
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        _LOGGER.debug("app_request %s body_keys=%s", path, sorted(body.keys()))
+        resp = requests.post(url, headers=headers, json=body, timeout=15)
+        try:
+            out = resp.json()
+        except ValueError:
+            return {"code": resp.status_code, "msg": "non_json_response", "text": resp.text[:300]}
+        if isinstance(out, dict):
+            if str(out.get("code")) == "444":
+                raise PhilipsSessionExpired("session_expired")
+            out["_http_status"] = resp.status_code
+        return out
+
+    def _sign_app(self, sign_obj):
+        """base64(RSA_PKCS1v15(SHA256(JSON.stringify(sign_obj)))).
+
+        Unlike `_sign`, the JSON is serialised in insertion order (not sorted),
+        matching JavaScript's JSON.stringify as the app uses it.
+        """
+        from Crypto.PublicKey import RSA
+        from Crypto.Hash import SHA256
+        from Crypto.Signature import pkcs1_15
+
+        key = RSA.import_key(RSA_PRIVATE_SIGN)
+        canonical = json.dumps(sign_obj, separators=(",", ":"))  # insertion order
+        h = SHA256.new(canonical.encode())
+        return base64.b64encode(pkcs1_15.new(key).sign(h)).decode()
+
+    # ---- Activity / history ------------------------------------------
+
+    def get_latest_activity(self, esn):
+        """Most recent operation record(s) for a lock (for event polling)."""
+        return self._app_request(
+            self.APP_ACTIVITY_LATEST,
+            {"wifiSN": esn},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    def get_activity(self, esn, page_no=1, page_size=20):
+        """A page of the operation history for a lock."""
+        return self._app_request(
+            self.APP_ACTIVITY_LIST,
+            {"wifiSN": esn, "pageNo": page_no, "pageSize": page_size},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    def get_alarms(self, esn, page_no=1, page_size=20):
+        """A page of alarm records (duress, tamper, etc.) for a lock."""
+        return self._app_request(
+            self.APP_ACTIVITY_ALARM,
+            {"wifiSN": esn, "pageNo": page_no, "pageSize": page_size},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    # ---- Credentials: PINs / fingerprints ----------------------------
+
+    def list_keys(self, esn):
+        """List the credentials (PINs, fingerprints, cards, faces) on a lock."""
+        return self._app_request(
+            self.APP_USER_LIST, {"wifiSN": esn}, sign_fields=["reqTime", "wifiSN"]
+        )
+
+    def create_pin(self, esn, name, pin, key_type=1, user_number_id=0):
+        """Create a numeric PIN credential.
+
+        key_type follows the app's credential type enum (1 = password/PIN). The
+        payload field names come from the bundle; confirm against a capture.
+        """
+        return self._app_request(
+            self.APP_KEY_CREATE,
+            {
+                "wifiSN": esn,
+                "userNumberId": user_number_id,
+                "keyType": key_type,
+                "keyName": name,
+                "keyValue": pin,
+            },
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    def update_key(self, esn, key_id, name=None, pin=None):
+        """Rename or change a credential (used for PINs and fingerprint labels)."""
+        body = {"wifiSN": esn, "keyId": key_id}
+        if name is not None:
+            body["keyName"] = name
+        if pin is not None:
+            body["keyValue"] = pin
+        return self._app_request(self.APP_KEY_UPDATE, body, sign_fields=["reqTime", "wifiSN"])
+
+    def delete_key(self, esn, key_id):
+        """Delete a credential (PIN or fingerprint) by its id."""
+        return self._app_request(
+            self.APP_KEY_DELETE,
+            {"wifiSN": esn, "keyId": key_id},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    # ---- Sharing management ------------------------------------------
+
+    def list_shares(self, esn):
+        """List the accounts a lock is shared with."""
+        return self._app_request(
+            self.APP_SHARE_LIST,
+            {"uid": self.uid, "wifiSN": esn},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    def add_share(self, esn, account, nickname=None):
+        """Share a lock with another account (by email/username)."""
+        body = {"wifiSN": esn, "shareAccount": account}
+        if nickname:
+            body["nickName"] = nickname
+        return self._app_request(self.APP_SHARE_ADD, body, sign_fields=["reqTime", "wifiSN"])
+
+    def delete_share(self, esn, share_id):
+        """Revoke a share by its shareId (from list_shares / device list)."""
+        return self._app_request(
+            self.APP_SHARE_DEL,
+            {"wifiSN": esn, "shareId": share_id},
+            sign_fields=["reqTime", "wifiSN"],
+        )
+
+    # ---- Account creation (for "step through creating a shared account") --
+
+    def send_registration_token(self, email):
+        """Send a verification code to an email for new-account registration."""
+        return self._app_request(
+            self.APP_SEND_TOKEN, {"email": email}, sign_fields=["reqTime", "email"]
+        )
+
+    def check_registration_code(self, email, code):
+        """Verify the emailed registration code."""
+        return self._app_request(
+            self.APP_CHECK_CODE,
+            {"email": email, "checkCode": code},
+            sign_fields=["reqTime", "email"],
+        )
+
+    def register_account(self, email, password, code):
+        """Create a new account by email once its code is verified."""
+        return self._app_request(
+            self.APP_REGISTER_EMAIL,
+            {"email": email, "password": password, "checkCode": code},
+            sign_fields=["reqTime", "email"],
+        )

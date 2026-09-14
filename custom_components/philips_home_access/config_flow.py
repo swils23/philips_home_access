@@ -5,6 +5,7 @@ from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 
 from .const import (
+    CONF_APP_HOST,
     CONF_REGION,
     CONF_SCAN_INTERVAL,
     DEFAULT_SCAN_INTERVAL_MINUTES,
@@ -146,11 +147,17 @@ class PhilipsHomeAccessOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
+            # Blank app_host means "not set"; drop it so it doesn't override.
+            if not user_input.get(CONF_APP_HOST):
+                user_input.pop(CONF_APP_HOST, None)
             return self.async_create_entry(title="", data=user_input)
 
         current_interval = self.config_entry.options.get(
             CONF_SCAN_INTERVAL,
             self.config_entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES),
+        )
+        current_app_host = self.config_entry.options.get(
+            CONF_APP_HOST, self.config_entry.data.get(CONF_APP_HOST, "")
         )
 
         return self.async_show_form(
@@ -166,7 +173,15 @@ class PhilipsHomeAccessOptionsFlow(config_entries.OptionsFlow):
                             min=MIN_SCAN_INTERVAL_MINUTES,
                             max=MAX_SCAN_INTERVAL_MINUTES,
                         ),
-                    )
+                    ),
+                    # Optional: base URL for the datacenter host that serves the
+                    # activity / PIN / sharing endpoints. Leave blank until it is
+                    # known (see docs/reverse-engineering-notes.md); setting it
+                    # activates those features with no code change.
+                    vol.Optional(
+                        CONF_APP_HOST,
+                        default=current_app_host,
+                    ): str,
                 }
             ),
         )

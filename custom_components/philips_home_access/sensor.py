@@ -1,81 +1,60 @@
 from __future__ import annotations
-from datetime import timedelta
+
 import logging
+
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import PERCENTAGE, SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES, DOMAIN
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    api = hass.data[DOMAIN][entry.entry_id]
-
-    devices = await hass.async_add_executor_job(api.get_devices)
-    _LOGGER.debug("sensor: get_devices returned %d devices", len(devices))
-
-    if not devices:
-        _LOGGER.warning("sensor: no devices returned; no sensors will be created")
-        return
+    coordinator = hass.data[DOMAIN][entry.entry_id]
+    devices = coordinator.data["devices"].values()
 
     entities = []
     for d in devices:
         esn = d.get("wifiSN")
         if not esn:
-            _LOGGER.debug("sensor: skipping device without wifiSN: %s", d)
             continue
-
         name = d.get("lockNickname") or "Philips Home Access Device"
-        device_type = d.get("deviceType")
-
         device_info = {
             "identifiers": {(DOMAIN, esn)},
             "name": name,
             "manufacturer": "Philips",
             "model": d.get("productModel", "Philips Home Access Device"),
-            "sw_version": d.get("lockSoftwareVersion") or d.get("wifiVersion") or d.get("gatewayVersion"),
+            "sw_version": d.get("lockSoftwareVersion")
+            or d.get("wifiVersion")
+            or d.get("gatewayVersion"),
         }
-
+        device_type = d.get("deviceType")
         if device_type == "LOCK":
-            entities.append(PhilipsBatterySensor(api, entry, esn, name, device_info))
-            entities.append(PhilipsSignalSensor(api, entry, esn, name, device_info))
+            entities.append(PhilipsBatterySensor(coordinator, esn, name, device_info))
+            entities.append(PhilipsSignalSensor(coordinator, esn, name, device_info))
         elif device_type == "GATEWAY":
-            entities.append(PhilipsSignalSensor(api, entry, esn, name, device_info))
+            entities.append(PhilipsSignalSensor(coordinator, esn, name, device_info))
 
     _LOGGER.debug("sensor: adding %d entities", len(entities))
-    async_add_entities(entities, update_before_add=True)
+    async_add_entities(entities)
 
 
-class PhilipsBaseSensor(SensorEntity):
-    _attr_should_poll = True
-    def __init__(self, api, entry, esn: str, name: str, device_info: dict):
-        self._api = api
+class PhilipsBaseSensor(CoordinatorEntity, SensorEntity):
+    def __init__(self, coordinator, esn: str, name: str, device_info: dict):
+        super().__init__(coordinator)
         self._esn = esn
         self._name = name
         self._attr_device_info = device_info
-        self._attr_available = True
-        interval_minutes = entry.options.get(
-            CONF_SCAN_INTERVAL,
-            entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES),
-        )
-        self._attr_scan_interval = timedelta(minutes=interval_minutes)
 
-    async def async_update(self):
-        try:
-            devices = await self.hass.async_add_executor_job(self._api.get_devices)
-            for d in devices:
-                if d.get("wifiSN") == self._esn:
-                    self._attr_available = True
-                    self._handle_device(d)
-                    return
-            self._attr_available = False
-        except Exception as err:
-            _LOGGER.debug("sensor: update failed for %s: %r", self._esn, err)
-            self._attr_available = False
+    @property
+    def _device(self):
+        return self.coordinator.data["devices"].get(self._esn)
 
-    def _handle_device(self, device: dict) -> None:
-        raise NotImplementedError
+    @property
+    def available(self) -> bool:
+        return super().available and self._device is not None
 
 
 class PhilipsBatterySensor(PhilipsBaseSensor):
@@ -83,13 +62,15 @@ class PhilipsBatterySensor(PhilipsBaseSensor):
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_icon = "mdi:battery"
 
-    def __init__(self, api, entry, esn: str, name: str, device_info: dict):
-        super().__init__(api, entry, esn, name, device_info)
+    def __init__(self, coordinator, esn, name, device_info):
+        super().__init__(coordinator, esn, name, device_info)
         self._attr_name = f"{name} Battery"
         self._attr_unique_id = f"philips_{esn}_battery"
 
-    def _handle_device(self, d: dict) -> None:
-        self._attr_native_value = d.get("power")
+    @property
+    def native_value(self):
+        device = self._device
+        return device.get("power") if device else None
 
 
 class PhilipsSignalSensor(PhilipsBaseSensor):
@@ -97,16 +78,20 @@ class PhilipsSignalSensor(PhilipsBaseSensor):
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
     _attr_icon = "mdi:wifi"
 
-    def __init__(self, api, entry, esn: str, name: str, device_info: dict):
-        super().__init__(api, entry, esn, name, device_info)
+    def __init__(self, coordinator, esn, name, device_info):
+        super().__init__(coordinator, esn, name, device_info)
         self._attr_name = f"{name} WiFi Signal"
         self._attr_unique_id = f"philips_{esn}_rssi"
 
-    def _handle_device(self, d: dict) -> None:
-        raw = d.get("rssi", 0)
+    @property
+    def native_value(self):
+        device = self._device
+        if not device:
+            return None
+        raw = device.get("rssi", 0)
         if isinstance(raw, str):
             raw = raw.replace("dBm", "").strip()
         try:
-            self._attr_native_value = float(raw)
-        except Exception:
-            self._attr_native_value = None
+            return float(raw)
+        except (TypeError, ValueError):
+            return None

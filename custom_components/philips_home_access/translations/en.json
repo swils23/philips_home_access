@@ -35,7 +35,11 @@
         "title": "Polling Settings",
         "description": "Choose how often the integration polls the Philips API for updates.",
         "data": {
-          "scan_interval": "Polling interval (minutes)"
+          "scan_interval": "Polling interval (minutes)",
+          "app_host": "Activity/PIN/sharing host (advanced, optional)"
+        },
+        "data_description": {
+          "app_host": "Base URL for the datacenter host that serves activity, PIN and sharing endpoints. Leave blank until known."
         }
       }
     }

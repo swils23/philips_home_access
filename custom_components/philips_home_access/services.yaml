@@ -1,0 +1,85 @@
+create_pin:
+  name: Create PIN
+  description: >
+    Create a numeric PIN credential on a lock. Requires the datacenter host to
+    be configured (see docs/reverse-engineering-notes.md).
+  fields:
+    esn:
+      name: Lock serial (wifiSN)
+      description: The lock's wifiSN, shown in device diagnostics.
+      required: true
+      example: "3R21XXXXXXXXX"
+      selector:
+        text:
+    name:
+      name: Name
+      description: Label for the credential / who it belongs to.
+      required: true
+      example: "Guest"
+      selector:
+        text:
+    pin:
+      name: PIN
+      description: The numeric code.
+      required: true
+      example: "1234"
+      selector:
+        text:
+
+delete_credential:
+  name: Delete credential
+  description: >
+    Delete a credential (PIN or fingerprint) by its id. Only deletes the id you
+    pass; existing credentials are untouched.
+  fields:
+    esn:
+      name: Lock serial (wifiSN)
+      required: true
+      selector:
+        text:
+    key_id:
+      name: Credential id
+      description: The credential's id, from the lock's credential list.
+      required: true
+      selector:
+        text:
+
+add_share:
+  name: Share lock
+  description: >
+    Share a lock with another account so it can control the lock while the owner
+    stays logged in.
+  fields:
+    esn:
+      name: Lock serial (wifiSN)
+      required: true
+      selector:
+        text:
+    account:
+      name: Account
+      description: Email or username of the account to share with.
+      required: true
+      selector:
+        text:
+    nickname:
+      name: Nickname
+      description: Optional label for the shared user.
+      required: false
+      selector:
+        text:
+
+remove_share:
+  name: Remove share
+  description: Revoke a share from a lock by its shareId.
+  fields:
+    esn:
+      name: Lock serial (wifiSN)
+      required: true
+      selector:
+        text:
+    share_id:
+      name: Share id
+      description: The shareId from the lock's share list or diagnostics.
+      required: true
+      selector:
+        text:

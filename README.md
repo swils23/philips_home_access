@@ -4,6 +4,10 @@ Home Assistant custom integration for Philips Home Access WiFi locks.
 
 This integration allows you to monitor and control Philips Home Access locks directly from Home Assistant.
 
+> **This is a fork** of [rjbogz/philips_home_access](https://github.com/rjbogz/philips_home_access)
+> adding shared-account control, activity events, and PIN/sharing management.
+> See [Fork additions](#fork-additions) below.
+
 ## Features
 
 - Lock and unlock your Philips Home Access lock
@@ -12,6 +16,45 @@ This integration allows you to monitor and control Philips Home Access locks dir
 - Monitor WiFi signal strength
 - Automatic session expiration detection
 - Repair flow support for re-authentication
+- **Works from a shared account** — control the lock without logging the owner out
+- **Activity events** — fire Home Assistant events on unlock/lock/alarm for notifications
+- **PIN and sharing services** — create PINs, delete credentials, add/remove shares
+
+## Fork additions
+
+### Shared-account control
+
+The upstream note "you can not be logged in to the app and this integration at
+the same time" is about a single account: logging in one place invalidates the
+other's session. The fix is to share the lock to a **second** account in the
+Philips app and configure the integration with that shared account — the owner's
+app session then stays alive. Device discovery was made to see shared devices
+(they arrive under a different key in the API), and lock/unlock works
+identically from the shared account.
+
+### Activity events
+
+Each lock gets an `event` entity that fires when a new operation record appears
+(door unlocked, PIN used, alarm, etc.), so you can, for example, notify when the
+door is unlocked. This uses a newer part of the Philips cloud API whose
+datacenter host must be resolved once before it can be enabled — see
+[`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md) and the
+**Activity/PIN/sharing host** option. Until then the event entity stays idle.
+
+### PIN, credential, and sharing services
+
+Services `philips_home_access.create_pin`, `delete_credential`, `add_share`, and
+`remove_share` (see `services.yaml`). These call the same newer API surface and
+report a clear error until the datacenter host is configured. Deleting a
+credential only removes the id you pass — existing PINs/fingerprints are left
+alone.
+
+### The `tools/` and `../android-re/` helpers
+
+`tools/` holds the discovery probes used to reverse-engineer the API; the shared
+`android-re/` workbench (a rooted-emulator + mitmproxy + Frida setup usable by
+other projects) is for capturing the one request needed to finish the
+activity/PIN/sharing features. Both are documented in the RE notes.
 
 ## Supported Devices
 
@@ -81,6 +124,7 @@ For each lock:
 - WiFi signal strength sensor
 - Auto-Lock toggle
 - Auto-Lock delay (10s-180s)
+- Activity event entity (idle until the datacenter host is configured)
 
 
 For each gateway:

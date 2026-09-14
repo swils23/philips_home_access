@@ -1,0 +1,8 @@
+
+# Local credentials for RE/testing - never commit
+.env
+.env.*
+tools/*-report*.json
+*.flows
+__pycache__/
+*.pyc

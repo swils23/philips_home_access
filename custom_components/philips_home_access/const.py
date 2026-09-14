@@ -1,10 +1,19 @@
 DOMAIN = "philips_home_access"
 CONF_REGION = "region"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_APP_HOST = "app_host"
 DEFAULT_SCAN_INTERVAL_MINUTES = 1
 MIN_SCAN_INTERVAL_MINUTES = 1
 MAX_SCAN_INTERVAL_MINUTES = 60
-REGIONS = ["PhilipsNorthAmerica", "PhilipsSingapore", "PhilipsOneness"]
+# Region codes returned by the login endpoint under data.users[].code. Each is a
+# separate datacenter with its own token. "PhilipsNorthAmericaNew" was observed
+# live but was missing from the original list.
+REGIONS = [
+    "PhilipsNorthAmerica",
+    "PhilipsNorthAmericaNew",
+    "PhilipsSingapore",
+    "PhilipsOneness",
+]
 # Static bearer sent with the pre-auth login call; not account specific.
 LOGIN_STATIC_TOKEN = "5+4KiiOY06hCN8wSZG3yAYBI6uXgQHBxc1EsCA3tLSrrRx2IY7ni1F9IloXpOFrY/gzAd/iSbIb9gU54w9ldWzbvtV5jNh4EQWT68zLAtIUv5Sd7P9FT7ddikjnqRojOS/8NtOzoUu9HpUb/kTEKKjPQWD9wHSV6pmESiOMq+kPn/ezdrFM4jWKaTq8U5Yl1E7+d2fXWiDn+UlP4FhdgxlUs0bO9PDQOhlA3pZbDg3n8ouwgF2zFoFMMJTdHbNLHvcMyq7vlN9kqPVq4rSebjg=="
 RSA_HEX_KEY = "30819f300d06092a864886f70d010101050003818d0030818902818100c086f7d52c6ac9fccdf1a549d3d7194ddf41355044b1840986985c93c77a77be9c45e33318a548f01dc902be0ff3bd9c2135382c9b708d4fb2c0744f250a5d982b8068519e8861b6d748e6b4dbf6eb0125f8923a4e3db4dc6837d8b9dd8215641b6bde5de5d95fdc97fd6777933f034aed84342c30d630e43a2f1a06a9c2dc890203010001"
