@@ -32,22 +32,25 @@ app session then stays alive. Device discovery was made to see shared devices
 (they arrive under a different key in the API), and lock/unlock works
 identically from the shared account.
 
-### Activity events
+### Sharing management (working)
 
-Each lock gets an `event` entity that fires when a new operation record appears
-(door unlocked, PIN used, alarm, etc.), so you can, for example, notify when the
-door is unlocked. This uses a newer part of the Philips cloud API whose
-datacenter host must be resolved once before it can be enabled — see
-[`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md) and the
-**Activity/PIN/sharing host** option. Until then the event entity stays idle.
+Services `philips_home_access.add_share` and `remove_share` (see `services.yaml`)
+share a lock with another account and revoke it, using the North America
+datacenter host (`api.homeaccesstech.com`) that ships as the default `app_host`.
+Verified live. Removing a share only revokes the `shareId` you pass — existing
+shares are left alone.
 
-### PIN, credential, and sharing services
+### Activity events and PIN/credential services (host known; body pending)
 
-Services `philips_home_access.create_pin`, `delete_credential`, `add_share`, and
-`remove_share` (see `services.yaml`). These call the same newer API surface and
-report a clear error until the datacenter host is configured. Deleting a
-credential only removes the id you pass — existing PINs/fingerprints are left
-alone.
+Each lock gets an `event` entity meant to fire on new operation records (door
+unlocked, PIN used, alarm, etc.) for notifications, plus `create_pin` and
+`delete_credential` services. The datacenter host for these is now known and
+built in, but the exact request body for the `record/operation` and
+`device/user` endpoints still needs to be confirmed from one capture of the app
+(they return 500 to direct calls while sharing on the same host returns 200) —
+see [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md) and
+`../android-re/CAPTURE.md`. Until then the event entity stays idle and the PIN
+services surface a clear error.
 
 ### The `tools/` and `../android-re/` helpers
 

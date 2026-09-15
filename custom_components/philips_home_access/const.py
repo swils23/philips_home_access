@@ -2,6 +2,10 @@ DOMAIN = "philips_home_access"
 CONF_REGION = "region"
 CONF_SCAN_INTERVAL = "scan_interval"
 CONF_APP_HOST = "app_host"
+# North America datacenter host for the activity/credential/sharing endpoints
+# (mirror: https://api.securelocktech.com). Confirmed live; other regions have
+# their own host, obtainable from the app's getRegions response.
+DEFAULT_APP_HOST = "https://api.homeaccesstech.com"
 DEFAULT_SCAN_INTERVAL_MINUTES = 1
 MIN_SCAN_INTERVAL_MINUTES = 1
 MAX_SCAN_INTERVAL_MINUTES = 60

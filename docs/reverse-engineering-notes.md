@@ -13,7 +13,19 @@ Three cooperating hosts, not one:
 | --- | --- | --- |
 | `user-oneness.juziwulian.com` | `/homeaccess/oauth/login`, account (`/homeaccess/account`, 405 on POST → it's GET) | static `LOGIN_STATIC_TOKEN` for login; per-user `token` after |
 | `api.idlespacetech.com` | `/homeaccess/device/list`, `/v3/*`, `/v4/*` (lock/unlock, attrs, auto-lock) | per-user `token` + RSA signature in body |
-| **north-america datacenter host** (unresolved) | `/app/*`, `/philips/record/*`, `/philips/device/secret/*` (activity, PINs, sharing) | per-user `token` + signature; exact scheme unconfirmed |
+| **`api.homeaccesstech.com`** (North America datacenter; mirror `api.securelocktech.com`) | sharing (`/wifi/share/*`), activity (`/homeaccess/record/operation/*`), credentials (`/homeaccess/device/user/*`) | per-user `token` + RSA signature in body |
+
+**The datacenter host was recovered by running the app** (see `../android-re/CAPTURE.md`):
+on an emulator whose image has ARM translation (`ro.dalvik.vm.native.bridge=
+libndk_translation.so`, e.g. the API 36 google_apis x86_64 image), the arm64-only
+APK installs and runs. Routed through mitmproxy, the app hits **`api.homeaccesstech.com`**
+(and `api.securelocktech.com`) at startup — the base URL its `getRegions` response
+returns as `appHttpAddr` for North America. It is not present in the APK (JS bundle
+or native libs) or the login response; it is fetched at runtime. Other regions have
+their own host.
+
+Note the server drops the app's `/app/` route prefix: the JS calls
+`/app/wifi/share/list`, the server path is `/wifi/share/list`.
 
 `login` returns `data.users[]`, one entry per region/datacenter the account
 belongs to, each with its own `token` (and `dataCenter`, e.g. `north-america`).
@@ -79,32 +91,33 @@ in-app screens, not API calls, and are excluded.
 
 Full extracted path list: `tools/apipaths.txt` (generated; see discovery tools).
 
-## The blocker (features: activity, PINs, sharing)
+## Status per feature
 
-All `/app/*` and `/philips/record|secret|share/*` endpoints return a uniform
-`code: 500` via `user-oneness` and `404` via `idlespacetech`, for **every**
-method/header/body/signature combination — including a bare-token `getUserInfo`.
-A uniform 500 independent of the request means the request never reaches the
-handler: `user-oneness` proxies `/app/*` to the account's **datacenter** service
-and that hop fails from this entry host. The datacenter base URL is resolved at
-runtime (Huawei GRS / dbankcloud style) — it is **not** a literal in the bundle,
-**not** in the login response, and **not** DNS-guessable (tried the obvious
-`user-northamerica`, `api-na`, etc. — none resolve).
+**Sharing (`/wifi/share/*`): working and verified live.**
+`POST https://api.homeaccesstech.com/wifi/share/list` with body
+`{"uid":...,"wifiSN":...,"sign":...,"reqTime":...}`, signature over the
+insertion-ordered subset `{"reqTime":...,"wifiSN":...}`, returns `code:200` with
+the real share list (`_id` = shareId, `uname`, `userNickname`). `add`/`del`/
+`updatenickname` use the same host and scheme with the bundle's field names.
+Wired in `api.py` (`list_shares`/`add_share`/`delete_share`) and exposed as the
+`add_share`/`remove_share` services.
 
-### How to finish it (one capture)
+**Activity (`/homeaccess/record/operation/{latest,list,alarm}`) and credentials
+(`/homeaccess/device/user/*`, keys): host + route confirmed, exact request body
+still open.** These return `code:500` (route exists — a wrong path 404s) for
+every body/param/sign/encrypt combination tried directly, while `/wifi/share/list`
+and `/homeaccess/device/list` on the same host with the same signing return 200.
+So the record/credential endpoints need a request shape the app produces that
+direct probing hasn't reproduced. They are wired to the right host and paths;
+the remaining work is to confirm the body from one capture of the app's own
+request (it only makes these once logged in and viewing a lock's activity).
 
-Point a proxy at the real app once and grab a single `/app/*` request:
+### Finishing activity + credentials (one capture)
 
-1. Run the app on Android with a system-trusted mitmproxy CA (see
-   `../android-re/` for the workbench, or a physical device).
-2. Open the lock's **activity/history** screen (fires `/app/record/operation/*`).
-3. From the captured request, record: the **Host**, the full **header set**
-   (esp. any `k-*`, `appId`, `sign*`, `nonce`), and the exact request **body**.
-
-With those three facts, fill in `PhilipsHomeAccessAPI._app_host` and
-`_app_request()` in `api.py` (structure + endpoints already in place) and the
-activity/PIN/share features light up. Everything else is already wired.
-
-Note: the app is React Native + Hermes, arm64-only in the APKPure build; a plain
-x86_64 emulator can't run it without an x86_64/universal build or an
-ARM-translation system image.
+With the workbench (`../android-re/`, `CAPTURE.md`): the arm64 app runs on the
+API 36 x86_64 image (ARM translation), mitmproxy decrypts the Philips API hosts
+after the CA is added to the conscrypt APEX store (`re.ps1 cert` handles Android
+14+). Log into the app (owner account), open a lock's **activity** screen, and
+read the `POST .../record/operation/*` request body from mitmweb. Match it in
+`api.py` `get_activity`/`get_latest_activity`. Note a couple of analytics/login
+hosts pin certificates (Frida `unpin` if login must go through the proxy).

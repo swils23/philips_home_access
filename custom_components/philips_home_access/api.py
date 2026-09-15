@@ -7,7 +7,7 @@ import logging
 
 _LOGGER = logging.getLogger(__name__)
 
-from .const import LOGIN_STATIC_TOKEN, RSA_HEX_KEY, RSA_PRIVATE_SIGN
+from .const import DEFAULT_APP_HOST, LOGIN_STATIC_TOKEN, RSA_HEX_KEY, RSA_PRIVATE_SIGN
 
 
 class PhilipsSessionExpired(Exception):
@@ -54,13 +54,12 @@ class PhilipsHomeAccessAPI:
         self.uid = None
         self.data_center = None
         self.users_by_region = {}
-        # Base URL for the newer "/app/*" and "/philips/record|secret|share/*"
-        # endpoints (activity, credentials, sharing). These live on a per-
-        # datacenter host that is resolved by the app at runtime and is not a
-        # literal we can hardcode. Until it is known (see
-        # docs/reverse-engineering-notes.md) the app-layer methods raise
-        # PhilipsAppApiUnavailable instead of firing malformed requests.
-        self.app_host = app_host
+        # Base URL for the newer datacenter endpoints (activity, credentials,
+        # sharing). The app resolves this per region at runtime; for North
+        # America it is api.homeaccesstech.com (mirror: api.securelocktech.com),
+        # confirmed live. Other regions have their own host (from the app's
+        # getRegions response). Overridable via the app_host option.
+        self.app_host = app_host or DEFAULT_APP_HOST
 
     def _mask(self, value, keep=4):
         if not value:
@@ -473,17 +472,23 @@ class PhilipsHomeAccessAPI:
     # ------------------------------------------------------------------
 
     # Discovered endpoints, grouped by feature.
-    APP_ACTIVITY_LATEST = "/app/record/operation/latest"
-    APP_ACTIVITY_LIST = "/app/record/operation/list"
-    APP_ACTIVITY_ALARM = "/app/record/operation/alarm"
-    APP_KEY_CREATE = "/app/iot/ble/device/user/key/create"
-    APP_KEY_UPDATE = "/app/iot/ble/device/user/key/update"
-    APP_KEY_DELETE = "/app/iot/ble/device/user/key/delete"
-    APP_USER_LIST = "/app/iot/ble/device/user/list/"
-    APP_SHARE_ADD = "/app/wifi/share/add"
-    APP_SHARE_DEL = "/app/wifi/share/del"
-    APP_SHARE_LIST = "/app/wifi/share/list"
-    APP_SHARE_RENAME = "/app/wifi/share/updatenickname"
+    # Server paths on the datacenter host. The app's JS uses "/app/..." route
+    # names, but the server drops that prefix: share is served bare at
+    # "/wifi/share/*" (confirmed 200 live), while record/credential endpoints sit
+    # under "/homeaccess/*". The share paths are verified; the record/key paths
+    # exist (they 500 rather than 404) but their exact request body is not yet
+    # confirmed — see docs/reverse-engineering-notes.md.
+    APP_SHARE_LIST = "/wifi/share/list"
+    APP_SHARE_ADD = "/wifi/share/add"
+    APP_SHARE_DEL = "/wifi/share/del"
+    APP_SHARE_RENAME = "/wifi/share/updatenickname"
+    APP_ACTIVITY_LATEST = "/homeaccess/record/operation/latest"
+    APP_ACTIVITY_LIST = "/homeaccess/record/operation/list"
+    APP_ACTIVITY_ALARM = "/homeaccess/record/operation/alarm"
+    APP_USER_LIST = "/homeaccess/device/user/list/"
+    APP_KEY_CREATE = "/homeaccess/iot/ble/device/user/key/create"
+    APP_KEY_UPDATE = "/homeaccess/iot/ble/device/user/key/update"
+    APP_KEY_DELETE = "/homeaccess/iot/ble/device/user/key/delete"
     APP_SEND_TOKEN = "/app/user/sendToken"
     APP_CHECK_CODE = "/app/user/checkCode"
     APP_REGISTER_EMAIL = "/app/user/reg/putuserbyemail"
@@ -514,20 +519,19 @@ class PhilipsHomeAccessAPI:
         body["sign"] = self._sign_app(sign_obj)
 
         url = f"{self.app_host}{path}"
+        # Header set confirmed live against api.homeaccesstech.com/wifi/share/list.
         headers = {
             "token": self.token,
-            "k-tenant": "philips",
-            "k-version": "4.11.0",
-            "k-language": "en_US",
-            "k-signv": "1.0.0",
             "reqSource": "app",
             "lang": "en_US",
             "language": "en_US",
             "timestamp": req_time,
             "Content-Type": "application/json; charset=utf-8",
         }
+        # Send the exact compact JSON the signature was computed over.
+        payload = json.dumps(body, separators=(",", ":"))
         _LOGGER.debug("app_request %s body_keys=%s", path, sorted(body.keys()))
-        resp = requests.post(url, headers=headers, json=body, timeout=15)
+        resp = requests.post(url, headers=headers, data=payload, timeout=15)
         try:
             out = resp.json()
         except ValueError:

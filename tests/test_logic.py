@@ -75,10 +75,21 @@ def test_sign_app_is_insertion_order_not_sorted():
     assert canonical != sorted_canonical
 
 
+def test_default_app_host_is_north_america():
+    from philips_home_access.const import DEFAULT_APP_HOST
+
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    assert api.app_host == DEFAULT_APP_HOST == "https://api.homeaccesstech.com"
+    # An explicit host overrides the default.
+    api2 = PhilipsHomeAccessAPI("u", "p", "X", app_host="https://example.test")
+    assert api2.app_host == "https://example.test"
+
+
 def test_app_methods_raise_when_host_unset():
     from philips_home_access.api import PhilipsAppApiUnavailable
 
-    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")  # app_host=None
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.app_host = None  # simulate an unresolved region
     api.token = "t"
     api.uid = "uid"
     for call in (
@@ -89,6 +100,33 @@ def test_app_methods_raise_when_host_unset():
     ):
         with pytest.raises(PhilipsAppApiUnavailable):
             call()
+
+
+def test_share_list_builds_confirmed_request(monkeypatch):
+    """list_shares must POST /wifi/share/list with body {uid,wifiSN,sign,reqTime}."""
+    import philips_home_access.api as apimod
+
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"code": 200, "data": []}
+
+    def fake_post(url, headers=None, data=None, timeout=None):
+        captured["url"] = url
+        captured["body"] = json.loads(data)
+        return _Resp()
+
+    monkeypatch.setattr(apimod.requests, "post", fake_post)
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.token, api.uid = "tok", "myuid"
+    api.list_shares("ESN123")
+    assert captured["url"] == "https://api.homeaccesstech.com/wifi/share/list"
+    assert captured["body"]["wifiSN"] == "ESN123"
+    assert captured["body"]["uid"] == "myuid"
+    assert "sign" in captured["body"] and "reqTime" in captured["body"]
 
 
 # --- activity classification ------------------------------------------------

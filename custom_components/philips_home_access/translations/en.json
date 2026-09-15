@@ -39,7 +39,7 @@
           "app_host": "Activity/PIN/sharing host (advanced, optional)"
         },
         "data_description": {
-          "app_host": "Base URL for the datacenter host that serves activity, PIN and sharing endpoints. Leave blank until known."
+          "app_host": "Datacenter host for activity/PIN/sharing. Defaults to the North America host; set this only to override for another region."
         }
       }
     }
