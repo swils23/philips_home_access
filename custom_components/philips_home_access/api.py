@@ -707,7 +707,27 @@ class PhilipsHomeAccessAPI:
         The new PIN takes the lowest free slot number.
         """
         pin = str(pin)
-        existing = (self.list_keys(esn).get("data") or {}).get("pwdList", [])
+        data = self.list_keys(esn).get("data") or {}
+        existing = data.get("pwdList", [])
+        # SAFETY: ble-add-key-list replaces the WHOLE credential set — sending only
+        # pwdList clears fingerprints/cards/faces. Those (fingerprints especially)
+        # can only be re-enrolled physically, so refuse rather than destroy them.
+        # Resending the other lists is not supported here (their ble-add shape is
+        # unconfirmed), so create is limited to locks whose only credentials are
+        # PINs. See docs/reverse-engineering-notes.md.
+        other = {
+            k: v for k in ("fingerprintList", "faceList", "cardList",
+                           "offlinePwdList", "timePwdList", "palmList")
+            if (v := data.get(k))
+        }
+        if other:
+            raise PhilipsAppApiUnavailable(
+                "Refusing to create a PIN: the ble-add-key-list registry step would "
+                "wipe this lock's other credentials ("
+                + ", ".join(f"{k}={len(v)}" for k, v in other.items())
+                + "), which for fingerprints/faces cannot be restored remotely. See "
+                "docs/reverse-engineering-notes.md."
+            )
         used = {p.get("num") for p in existing}
         num = next(i for i in range(100) if i not in used)
         now = int(time.time())

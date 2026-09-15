@@ -165,7 +165,16 @@ and use headers `k-tenant: philips`, `k-version: 4.19.2`, `k-language: en_US`,
      ("Wrong data parameter").
   3. `update-key-nickname` — sets the display name.
   The new PIN takes the lowest free slot. Verified: create adds the PIN and keeps
-  every existing one; delete removes only that slot.
+  every existing PIN; delete removes only that slot.
+
+**`ble-add-key-list` replaces the WHOLE credential set, not just PINs.** When the
+app created the first test PIN (sending only `pwdList`), the lock's three
+**fingerprints** were cleared too (`fingerprintList` 3 → 0 in the same step) — the
+endpoint drops every credential type not present in the request. Fingerprints and
+faces can only be re-enrolled physically, so `create_pin` **refuses** when the
+lock has any non-PIN credentials rather than destroy them: making create safe on
+such locks requires resending `fingerprintList`/`cardList`/etc. in the ble-add
+call, whose entry shapes are not yet captured. Delete is unaffected (targeted).
 
 ### How the capture was done
 
