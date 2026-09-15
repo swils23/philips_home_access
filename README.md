@@ -40,17 +40,24 @@ datacenter host (`api.homeaccesstech.com`) that ships as the default `app_host`.
 Verified live. Removing a share only revokes the `shareId` you pass — existing
 shares are left alone.
 
-### Activity events and PIN/credential services (host known; body pending)
+### Activity events (working)
 
-Each lock gets an `event` entity meant to fire on new operation records (door
-unlocked, PIN used, alarm, etc.) for notifications, plus `create_pin` and
-`delete_credential` services. The datacenter host for these is now known and
-built in, but the exact request body for the `record/operation` and
-`device/user` endpoints still needs to be confirmed from one capture of the app
-(they return 500 to direct calls while sharing on the same host returns 200) —
-see [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md) and
-`../android-re/CAPTURE.md`. Until then the event entity stays idle and the PIN
-services surface a clear error.
+Each lock gets an `event` entity that fires when a new operation record appears
+(`POST /v3/device/operation-list`), so you can notify on activity — e.g. when the
+door is unlocked. The cloud's event codes aren't fully documented, so the entity
+exposes them raw (`event_code`, `event_type_code`, `event_source`, plus
+`pin_nickname` when a PIN was used) for automations to match on precisely.
+
+### Credential (PIN/fingerprint) services
+
+`create_pin` and `delete_credential` services, plus credential listing via
+`POST /v3/device/key-list` (returns `pwdList` for PINs and `fingerprintList` for
+fingerprints, among other types). Listing is verified live; **creating and
+deleting** use inferred endpoints not yet captured (they change the physical
+lock), so confirm those from a capture before relying on them — see
+[`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md).
+`delete_credential` only removes the id you pass; existing credentials are left
+alone.
 
 ### The `tools/` and `../android-re/` helpers
 

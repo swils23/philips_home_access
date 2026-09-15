@@ -144,11 +144,35 @@ def test_share_list_builds_confirmed_request(monkeypatch):
         ("tamperAlarm", "tamper"),
         ("duress", "alarm"),
         ("visitor", "doorbell"),
-        ("something_new", "other"),
+        ("something_new", "operation"),
     ],
 )
 def test_classify(record_type, expected):
     assert event_mod._classify({"recordType": record_type}) == expected
+
+
+def test_classify_real_records():
+    # Numeric operation records default to "operation"; a PIN leaves pwdNickname.
+    assert event_mod._classify({"eventCode": 8, "eventSource": 255}) == "operation"
+    assert event_mod._classify({"eventCode": 9, "pwdNickname": "Sam"}) == "pin_unlock"
+
+
+def test_activity_signature_canonical_form():
+    """operation-list signs {esn, page, reqTime} as compact JSON in insertion
+    order with page as an int. The exact field order and page's int-ness both
+    matter — the live server rejects a mismatch with code 594. (The real
+    device-serial vector this was validated against is not committed.)
+    """
+    import json as _json
+
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    esn, rt = "ESNSYNTHETIC01", "1700000000000"
+    canonical = api._sign_app({"esn": esn, "page": 1, "reqTime": rt})
+    # Wrong order or page-as-string produce different signatures.
+    assert canonical != api._sign_app({"esn": esn, "reqTime": rt, "page": 1})
+    assert canonical != api._sign_app({"esn": esn, "page": "1", "reqTime": rt})
+    # page must serialise as a bare int (no quotes) in the signed string.
+    assert '"page":1' in _json.dumps({"esn": esn, "page": 1, "reqTime": rt}, separators=(",", ":"))
 
 
 def test_records_from_envelopes():

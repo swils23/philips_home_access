@@ -38,7 +38,7 @@ EVENT_TYPES = [
     "alarm",
     "tamper",
     "doorbell",
-    "other",
+    "operation",
 ]
 
 
@@ -65,8 +65,16 @@ def _records_from(activity) -> list[dict]:
 
 
 def _classify(record: dict) -> str:
+    """Best-effort event type for an operation record.
+
+    Records carry numeric eventType/eventCode/eventSource whose full meaning is
+    not documented, so classification is heuristic and the raw codes are always
+    exposed in the event attributes for automations to match on precisely. A
+    non-empty pwdNickname means a PIN credential was used.
+    """
     raw = _first(record, _RECORD_TYPE_KEYS)
     text = str(raw).lower() if raw is not None else ""
+    # String-typed records (if the API ever returns them) keep the old keywords.
     if any(t in text for t in ("tamper", "pry", "destroy")):
         return "tamper"
     if any(t in text for t in ("alarm", "duress", "warn")):
@@ -85,7 +93,10 @@ def _classify(record: dict) -> str:
         return "unlock"
     if "lock" in text or "close" in text:
         return "lock"
-    return "other"
+    # Numeric records: a PIN credential leaves a pwdNickname.
+    if record.get("pwdNickname"):
+        return "pin_unlock"
+    return "operation"
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -131,6 +142,11 @@ class PhilipsActivityEvent(CoordinatorEntity, EventEntity):
         attributes = {
             "user": _first(newest, _RECORD_USER_KEYS),
             "record_id": record_id,
+            # Raw codes so automations can match precisely on the real values.
+            "event_code": newest.get("eventCode"),
+            "event_type_code": newest.get("eventType"),
+            "event_source": newest.get("eventSource"),
+            "pin_nickname": newest.get("pwdNickname") or None,
             "raw": newest,
         }
         _LOGGER.debug("event: firing %s for esn=%s", event_type, self._esn)

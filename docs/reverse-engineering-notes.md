@@ -91,33 +91,48 @@ in-app screens, not API calls, and are excluded.
 
 Full extracted path list: `tools/apipaths.txt` (generated; see discovery tools).
 
-## Status per feature
+## Status per feature — all confirmed live
 
-**Sharing (`/wifi/share/*`): working and verified live.**
-`POST https://api.homeaccesstech.com/wifi/share/list` with body
-`{"uid":...,"wifiSN":...,"sign":...,"reqTime":...}`, signature over the
-insertion-ordered subset `{"reqTime":...,"wifiSN":...}`, returns `code:200` with
-the real share list (`_id` = shareId, `uname`, `userNickname`). `add`/`del`/
-`updatenickname` use the same host and scheme with the bundle's field names.
-Wired in `api.py` (`list_shares`/`add_share`/`delete_share`) and exposed as the
-`add_share`/`remove_share` services.
+The real server paths were captured by driving the running app through mitmproxy
+(`../android-re/CAPTURE.md`). The app's JS route names are NOT the server paths.
+All of the below return `code:200` with real data via `api.homeaccesstech.com`,
+using the header set `token`, `k-tenant: philips`, `k-version: 4.19.2`,
+`k-language: en_US`, `k-signv: 1.0.0`, and a body signature that is
+`base64(RSA-PKCS1v15(SHA256(JSON.stringify(<signed subset, insertion order>))))`.
 
-**Activity (`/homeaccess/record/operation/{latest,list,alarm}`) and credentials
-(`/homeaccess/device/user/*`, keys): host + route confirmed, exact request body
-still open.** These return `code:500` (route exists — a wrong path 404s) for
-every body/param/sign/encrypt combination tried directly, while `/wifi/share/list`
-and `/homeaccess/device/list` on the same host with the same signing return 200.
-So the record/credential endpoints need a request shape the app produces that
-direct probing hasn't reproduced. They are wired to the right host and paths;
-the remaining work is to confirm the body from one capture of the app's own
-request (it only makes these once logged in and viewing a lock's activity).
+| Feature | Server path | Body | Signed subset |
+| --- | --- | --- | --- |
+| Activity | `POST /v3/device/operation-list` | `{esn, page}` (page int) | `{esn, page, reqTime}` |
+| Credentials (PIN + fingerprint) | `POST /v3/device/key-list` | `{esn}` | `{esn, reqTime}` |
+| Sharing | `POST /wifi/share/list` | `{uid, wifiSN}` | `{reqTime, wifiSN}` |
 
-### Finishing activity + credentials (one capture)
+- **Activity** `data` is a list of records: `{_id, wifiSN, eventType, eventCode,
+  eventSource, createTime, timesTamp, type, userId, userNickname, pwdNickname,
+  uid, timeZone}`. The numeric event codes are not fully documented; the event
+  platform exposes them raw and a non-empty `pwdNickname` marks a PIN use.
+- **Credentials** `data` groups by type: `pwdList` (PINs, each `{_id, num,
+  nickName, pwdValue, type, uid}`), `fingerprintList`, `faceList`, `cardList`,
+  `offlinePwdList`, `timePwdList`, `palmList`.
+- **Sharing** `data` is the share list (`_id` = shareId, `uname`, `userNickname`).
 
-With the workbench (`../android-re/`, `CAPTURE.md`): the arm64 app runs on the
-API 36 x86_64 image (ARM translation), mitmproxy decrypts the Philips API hosts
-after the CA is added to the conscrypt APEX store (`re.ps1 cert` handles Android
-14+). Log into the app (owner account), open a lock's **activity** screen, and
-read the `POST .../record/operation/*` request body from mitmweb. Match it in
-`api.py` `get_activity`/`get_latest_activity`. Note a couple of analytics/login
-hosts pin certificates (Frida `unpin` if login must go through the proxy).
+Signature verification is strict on `/v3/device/*` (a wrong signed-subset returns
+`code:594 "Signature Verification Failed"`) and lenient on `/wifi/share/*`. The
+signing was cross-checked by reproducing a captured `function-List` signature and
+the captured `operation-list` / `key-list` signatures byte-for-byte
+(see `tests/test_logic.py::test_activity_signature_matches_captured`).
+
+**Not yet captured:** creating/deleting a credential (would change the physical
+lock). `create_pin`/`delete_key` use inferred `/v3/device/key-add` / `key-del`
+paths and the `key-list` record field names; confirm from a real add/delete
+capture before relying on them.
+
+### How the capture was done
+
+The arm64-only APK (`com.conex.philips`) runs on the **API 36 google_apis
+x86_64** emulator image (ARM translation: `ro.dalvik.vm.native.bridge=
+libndk_translation.so`). mitmproxy decrypts the Philips API hosts once the CA is
+added to the conscrypt APEX store (`re.ps1 cert`, Android 14+). The login host
+`user-oneness.juziwulian.com` **pins** its certificate, so log in with the proxy
+off (direct), then turn the proxy on and open the lock's Activities / PIN /
+Fingerprint screens to capture `operation-list` / `key-list`. Full runbook:
+`../android-re/CAPTURE.md`.

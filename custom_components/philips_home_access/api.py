@@ -24,25 +24,16 @@ class PhilipsAppApiUnavailable(Exception):
     """
 
 
-# Candidate keys for the list of records inside an activity response envelope.
-_RECORD_LIST_KEYS = ("list", "records", "rows", "content", "data", "items", "logs")
-
-# Candidate field names when normalising a single activity record. The activity
-# endpoint is undocumented, so each logical field is resolved from the first
-# candidate the record actually carries.
-_RECORD_ID_KEYS = ("recordId", "id", "logId", "eventId", "msgId", "seq")
-_RECORD_TIME_KEYS = (
-    "createTime", "recordTime", "openTime", "operateTime", "eventTime",
-    "gmtCreate", "time", "timestamp", "ts",
-)
-_RECORD_TYPE_KEYS = (
-    "recordType", "eventType", "operateType", "openType", "type", "action",
-    "opType", "msgType",
-)
-_RECORD_USER_KEYS = (
-    "userName", "nickName", "userNickname", "opUser", "operator", "userAlias",
-    "memberName", "userNumberId", "userNumber",
-)
+# Field names in an operation-list record, from the live capture. `data` is a
+# list of records shaped like:
+#   {_id, wifiSN, eventType, eventCode, eventSource, createTime, timesTamp,
+#    type, userId, userNickname, pwdNickname, uid, timeZone, tenant}
+# The first present candidate wins, so the parser tolerates minor variations.
+_RECORD_LIST_KEYS = ("list", "records", "rows", "content", "items", "logs")
+_RECORD_ID_KEYS = ("_id", "recordId", "id", "logId", "eventId")
+_RECORD_TIME_KEYS = ("createTime", "timesTamp", "timesTamp2", "recordTime", "eventTime", "time")
+_RECORD_TYPE_KEYS = ("eventCode", "eventType", "recordType", "type", "eventSource")
+_RECORD_USER_KEYS = ("userNickname", "pwdNickname", "userName", "nickName", "userId")
 
 
 class PhilipsHomeAccessAPI:
@@ -472,26 +463,23 @@ class PhilipsHomeAccessAPI:
     # ------------------------------------------------------------------
 
     # Discovered endpoints, grouped by feature.
-    # Server paths on the datacenter host. The app's JS uses "/app/..." route
-    # names, but the server drops that prefix: share is served bare at
-    # "/wifi/share/*" (confirmed 200 live), while record/credential endpoints sit
-    # under "/homeaccess/*". The share paths are verified; the record/key paths
-    # exist (they 500 rather than 404) but their exact request body is not yet
-    # confirmed — see docs/reverse-engineering-notes.md.
+    # Server paths on the datacenter host. The app's JS route names ("/app/...")
+    # are NOT the server paths; these were captured from the running app:
+    #   Activities screen -> POST /v3/device/operation-list
+    #   PIN/Fingerprint    -> POST /v3/device/key-list
+    #   Sharing            -> POST /wifi/share/list  (JS "/app/wifi/share/list")
+    # operation-list and key-list are confirmed live (200 + real data); the
+    # share paths are confirmed live; the key create/delete paths are inferred
+    # from the "/v3/device/key-*" family and not yet captured.
+    APP_ACTIVITY_LIST = "/v3/device/operation-list"
+    APP_KEY_LIST = "/v3/device/key-list"
     APP_SHARE_LIST = "/wifi/share/list"
     APP_SHARE_ADD = "/wifi/share/add"
     APP_SHARE_DEL = "/wifi/share/del"
     APP_SHARE_RENAME = "/wifi/share/updatenickname"
-    APP_ACTIVITY_LATEST = "/homeaccess/record/operation/latest"
-    APP_ACTIVITY_LIST = "/homeaccess/record/operation/list"
-    APP_ACTIVITY_ALARM = "/homeaccess/record/operation/alarm"
-    APP_USER_LIST = "/homeaccess/device/user/list/"
-    APP_KEY_CREATE = "/homeaccess/iot/ble/device/user/key/create"
-    APP_KEY_UPDATE = "/homeaccess/iot/ble/device/user/key/update"
-    APP_KEY_DELETE = "/homeaccess/iot/ble/device/user/key/delete"
-    APP_SEND_TOKEN = "/app/user/sendToken"
-    APP_CHECK_CODE = "/app/user/checkCode"
-    APP_REGISTER_EMAIL = "/app/user/reg/putuserbyemail"
+    # Inferred, not yet captured:
+    APP_KEY_CREATE = "/v3/device/key-add"
+    APP_KEY_DELETE = "/v3/device/key-del"
 
     def _app_request(self, path, body, sign_fields=None):
         """POST to an "/app/*" endpoint with the app's signing convention.
@@ -519,9 +507,13 @@ class PhilipsHomeAccessAPI:
         body["sign"] = self._sign_app(sign_obj)
 
         url = f"{self.app_host}{path}"
-        # Header set confirmed live against api.homeaccesstech.com/wifi/share/list.
+        # Header set captured from the app's operation-list / key-list requests.
         headers = {
             "token": self.token,
+            "k-tenant": "philips",
+            "k-version": "4.19.2",
+            "k-language": "en_US",
+            "k-signv": "1.0.0",
             "reqSource": "app",
             "lang": "en_US",
             "language": "en_US",
@@ -559,71 +551,56 @@ class PhilipsHomeAccessAPI:
 
     # ---- Activity / history ------------------------------------------
 
-    def get_latest_activity(self, esn):
-        """Most recent operation record(s) for a lock (for event polling)."""
-        return self._app_request(
-            self.APP_ACTIVITY_LATEST,
-            {"wifiSN": esn},
-            sign_fields=["reqTime", "wifiSN"],
-        )
+    def get_activity(self, esn, page=1):
+        """A page of the lock's operation records (newest first).
 
-    def get_activity(self, esn, page_no=1, page_size=20):
-        """A page of the operation history for a lock."""
+        Confirmed live: POST /v3/device/operation-list, body {esn, page},
+        signature over {esn, page, reqTime} with page as an integer. `data` is a
+        list of records with eventCode/eventType/eventSource/createTime/userId/
+        userNickname/pwdNickname fields.
+        """
         return self._app_request(
             self.APP_ACTIVITY_LIST,
-            {"wifiSN": esn, "pageNo": page_no, "pageSize": page_size},
-            sign_fields=["reqTime", "wifiSN"],
+            {"esn": esn, "page": int(page)},
+            sign_fields=["esn", "page", "reqTime"],
         )
 
-    def get_alarms(self, esn, page_no=1, page_size=20):
-        """A page of alarm records (duress, tamper, etc.) for a lock."""
-        return self._app_request(
-            self.APP_ACTIVITY_ALARM,
-            {"wifiSN": esn, "pageNo": page_no, "pageSize": page_size},
-            sign_fields=["reqTime", "wifiSN"],
-        )
+    # Kept for the event platform: the newest page is the latest activity.
+    def get_latest_activity(self, esn):
+        """Newest operation records for a lock (page 1)."""
+        return self.get_activity(esn, page=1)
 
     # ---- Credentials: PINs / fingerprints ----------------------------
 
     def list_keys(self, esn):
-        """List the credentials (PINs, fingerprints, cards, faces) on a lock."""
-        return self._app_request(
-            self.APP_USER_LIST, {"wifiSN": esn}, sign_fields=["reqTime", "wifiSN"]
-        )
+        """List the lock's credentials.
 
-    def create_pin(self, esn, name, pin, key_type=1, user_number_id=0):
-        """Create a numeric PIN credential.
-
-        key_type follows the app's credential type enum (1 = password/PIN). The
-        payload field names come from the bundle; confirm against a capture.
+        Confirmed live: POST /v3/device/key-list, body {esn}, signature over
+        {esn, reqTime}. `data` groups credentials by type: pwdList (PINs, each
+        with num/nickName/pwdValue), faceList, and finger/card lists.
         """
         return self._app_request(
-            self.APP_KEY_CREATE,
-            {
-                "wifiSN": esn,
-                "userNumberId": user_number_id,
-                "keyType": key_type,
-                "keyName": name,
-                "keyValue": pin,
-            },
-            sign_fields=["reqTime", "wifiSN"],
+            self.APP_KEY_LIST, {"esn": esn}, sign_fields=["esn", "reqTime"]
         )
 
-    def update_key(self, esn, key_id, name=None, pin=None):
-        """Rename or change a credential (used for PINs and fingerprint labels)."""
-        body = {"wifiSN": esn, "keyId": key_id}
-        if name is not None:
-            body["keyName"] = name
-        if pin is not None:
-            body["keyValue"] = pin
-        return self._app_request(self.APP_KEY_UPDATE, body, sign_fields=["reqTime", "wifiSN"])
+    def create_pin(self, esn, name, pin, num=None):
+        """Create a numeric PIN credential.
+
+        Endpoint/body inferred from the "/v3/device/key-*" family and the
+        key-list record shape (nickName + pwdValue + num); not yet captured, so
+        confirm against a real add-PIN capture before relying on it.
+        """
+        body = {"esn": esn, "nickName": name, "pwdValue": pin}
+        if num is not None:
+            body["num"] = int(num)
+        return self._app_request(self.APP_KEY_CREATE, body, sign_fields=["esn", "reqTime"])
 
     def delete_key(self, esn, key_id):
-        """Delete a credential (PIN or fingerprint) by its id."""
+        """Delete a credential (PIN or fingerprint) by its _id (inferred)."""
         return self._app_request(
             self.APP_KEY_DELETE,
-            {"wifiSN": esn, "keyId": key_id},
-            sign_fields=["reqTime", "wifiSN"],
+            {"esn": esn, "_id": key_id},
+            sign_fields=["esn", "reqTime"],
         )
 
     # ---- Sharing management ------------------------------------------
