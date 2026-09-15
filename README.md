@@ -48,21 +48,22 @@ door is unlocked. The cloud's event codes aren't fully documented, so the entity
 exposes them raw (`event_code`, `event_type_code`, `event_source`, plus
 `pin_nickname` when a PIN was used) for automations to match on precisely.
 
-### Credential (PIN/fingerprint) listing and deletion
+### Credential (PIN/fingerprint) services
+
+Full PIN CRUD, verified live end to end:
 
 - **List** — `POST /v3/device/key-list` returns `pwdList` (PINs) and
-  `fingerprintList` (fingerprints), among other types. Verified live.
-- **Delete** — the `delete_credential` service removes a credential by its slot
-  number (`num` from the list). It's targeted (device + registry removal, both
-  signature-verified against the app's own request) and cannot affect any other
-  slot.
+  `fingerprintList` (fingerprints), among other types.
+- **Create** — `create_pin` service adds a numeric PIN (`insert-pwd` device
+  programming + `ble-add-key-list` registry + `update-key-nickname`). It reads
+  the current credential list and resends it with the new entry, so existing
+  PINs are preserved, and the new PIN takes the lowest free slot.
+- **Delete** — `delete_credential` service removes a credential by its slot
+  number (`num` from the list). Targeted — it cannot affect any other slot.
 
-**Creating** a PIN is not wired up: it ends in a full-list-replace (a wrong
-request wipes the other PINs — this happened once in testing and was restored)
-*and* an encrypted device-programming step whose payload isn't confirmed, so a
-"created" PIN might list but not open the door. `create_pin` returns a clear
-error; [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md)
-documents exactly what remains (the write signing itself is already solved).
+The reverse-engineering that made this safe (the full-list-replace hazard, the
+encrypted device step, the write signing/headers) is in
+[`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md).
 
 ### The `tools/` and `../android-re/` helpers
 

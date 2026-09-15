@@ -143,26 +143,29 @@ Delete is targeted (safer):
 2. `POST /v3/device/ble-remove-pwd-list` — `{esn, sign, reqTime, pwdList:[{pwdType,
    num}]}`.
 
-**Write signing is solved.** These `/v3/device/*` endpoints (on
-`api.idlespacetech.com`, the `set_lock_state` family — *not* the newer
-homeaccesstech reads) sign the **whole body with SORTED keys** — the integration's
-existing `_sign`, not the reads' insertion-order `_sign_app`. Reproduced the
-captured `ble-add-key-list`, `remove-pwd`, `ble-remove-pwd-list` and
-`update-key-nickname` signatures byte-for-byte.
+**Create and delete are now implemented and verified live end to end.** These
+`/v3/device/*` endpoints (on `api.idlespacetech.com`, the `set_lock_state`
+family — *not* the newer homeaccesstech reads) sign the **whole body with SORTED
+keys** (the integration's `_sign`, not the reads' insertion-order `_sign_app`),
+and use headers `k-tenant: philips`, `k-version: 4.19.2`, `k-language: en_US`,
+`k-signv: 1.0.0` — the 4.11.0 header that works for lock control returns 500 here.
 
-- **`delete_key` is implemented and functional**: `remove-pwd` (device, plaintext)
-  then `ble-remove-pwd-list` (registry), both targeted by the slot number — it
-  cannot touch any other slot, so it needed no destructive live test.
-- **`create_pin` still raises.** Two things remain, and both need writes to a
-  physical lock to confirm: (1) the encrypted device step
-  `POST /v3/device/insert-pwd` — `{encryptData}` wrapping a sorted-signed payload
-  (like `set_lock_state`) whose ~351-byte (3 RSA block) field schema is
-  unconfirmed; a registry-only create (skipping it) would list a PIN that does
-  not open the door. (2) `ble-add-key-list` is a full-list REPLACE, so create must
-  resend every existing entry (reconstructed from `key-list`, which omits
-  `createTime`/`startTime`/`endTime`) plus the new one — trustworthy only once
-  tested live. A careful live trial on a free slot (never including existing
-  entries, cleaned up after) is the way to finish it.
+- **`delete_key`** (targeted by slot number, cannot touch another slot):
+  `remove-pwd` (device) then `ble-remove-pwd-list` (registry).
+- **`create_pin`** mirrors the app's three steps:
+  1. `insert-pwd` — encrypted device programming. `{encryptData}` wraps a
+     sorted-signed payload `{esn, num, pwdValue, nickName, pwdType, type,
+     startTime, endTime, reqTime, sign}` encrypted exactly like `set_lock_state`
+     (extra header `encrypt_data: encrypt_data`). Confirmed 200.
+  2. `ble-add-key-list` — registry, a **full-list REPLACE**: read the current
+     list and resend every existing entry (mapped to `{pwdValue, pwdType,
+     nickName, num, type, createTime, startTime, endTime}`) plus the new one. A
+     partial list wipes the rest. **Gotcha:** key-list returns `createTime` as a
+     **string**, but this endpoint wants an **int** — coerce it, or it 401s
+     ("Wrong data parameter").
+  3. `update-key-nickname` — sets the display name.
+  The new PIN takes the lowest free slot. Verified: create adds the PIN and keeps
+  every existing one; delete removes only that slot.
 
 ### How the capture was done
 

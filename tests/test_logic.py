@@ -189,6 +189,47 @@ def test_delete_key_builds_targeted_two_step_request(monkeypatch):
         assert "sign" in body and "reqTime" in body
 
 
+def test_create_pin_flow_and_createtime_is_int(monkeypatch):
+    """create_pin reads the list, then insert-pwd + ble-add (full list, existing
+    kept) + nickname. createTime must be coerced to int (key-list returns a
+    string; the API 401s on a string)."""
+    import philips_home_access.api as apimod
+
+    posts = []
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"code": 200, "msg": "Success"}
+
+    def fake_post(url, headers=None, data=None, json=None, timeout=None):
+        posts.append((url, json if json is not None else globals()["json"].loads(data)))
+        return _R()
+
+    monkeypatch.setattr(apimod.requests, "post", fake_post)
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.token = "tok"
+    # existing PIN at slot 1 with a STRING createTime (as the live API returns).
+    monkeypatch.setattr(
+        api, "list_keys",
+        lambda esn: {"data": {"pwdList": [
+            {"num": 1, "nickName": "Existing", "pwdValue": "0000", "type": 0, "createTime": "1700000000"}
+        ]}},
+    )
+    api.create_pin("ESN", "Guest", "0007")
+
+    paths = [u.split("idlespacetech.com")[1] for u, _ in posts]
+    assert paths[0] == "/v3/device/insert-pwd"          # encrypted device step
+    assert paths[1] == "/v3/device/ble-add-key-list"    # registry
+    assert paths[2] == "/v3/device/update-key-nickname"
+    ble_body = posts[1][1]
+    nums = {e["num"] for e in ble_body["pwdList"]}
+    assert nums == {0, 1}                                 # existing kept + new at free slot 0
+    for e in ble_body["pwdList"]:
+        assert isinstance(e["createTime"], int)          # coerced from string
+
+
 def test_write_signature_is_sorted_keys():
     """/v3/device/* writes sign the whole body with SORTED keys (the set_lock_state
     family), distinct from the reads' insertion-order scheme."""

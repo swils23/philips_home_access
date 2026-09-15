@@ -477,16 +477,15 @@ class PhilipsHomeAccessAPI:
     APP_SHARE_ADD = "/wifi/share/add"
     APP_SHARE_DEL = "/wifi/share/del"
     APP_SHARE_RENAME = "/wifi/share/updatenickname"
-    # Credential create/delete were captured but are NOT wired to fire: create is
-    # a multi-step flow ending in a FULL-LIST-REPLACE (/v3/device/ble-add-key-list
-    # with the entire pwdList — sending a partial list wipes the others) plus an
-    # RSA-encrypted device-programming step (/v3/device/insert-pwd) whose plaintext
-    # is unknown, and the write-endpoint signatures use a canonical this code has
-    # not reproduced. Delete is /v3/device/remove-pwd (targeted by keyNum) +
-    # /v3/device/ble-remove-pwd-list (targeted by num). See the RE notes; both are
-    # left guarded so a wrong request can't damage a physical lock's PINs.
-    APP_KEY_CREATE = "/v3/device/ble-add-key-list"
+    # Credential create/delete on idlespacetech (the set_lock_state family),
+    # sorted-signed, verified live end to end. Create: insert-pwd (encrypted
+    # device programming) + ble-add-key-list (registry, a FULL-LIST replace — the
+    # current list is read and resent, never a partial) + update-key-nickname.
+    # Delete: remove-pwd (targeted by keyNum) + ble-remove-pwd-list (targeted by
+    # num).
     APP_KEY_INSERT = "/v3/device/insert-pwd"
+    APP_KEY_CREATE = "/v3/device/ble-add-key-list"
+    APP_KEY_NICKNAME = "/v3/device/update-key-nickname"
     APP_KEY_DELETE = "/v3/device/remove-pwd"
     APP_KEY_DELETE_LIST = "/v3/device/ble-remove-pwd-list"
 
@@ -592,30 +591,21 @@ class PhilipsHomeAccessAPI:
             self.APP_KEY_LIST, {"esn": esn}, sign_fields=["esn", "reqTime"]
         )
 
-    def _signed_device_request(self, path, payload):
-        """POST a plaintext write to a /v3/device/* endpoint on idlespacetech.
-
-        These endpoints (the set_lock_state family) sign the FULL body with the
-        sorted-key scheme (`_sign`), unlike the newer read endpoints. Verified by
-        reproducing captured signatures for ble-add-key-list, remove-pwd,
-        ble-remove-pwd-list and update-key-nickname byte-for-byte.
-        """
-        payload = dict(payload)
-        payload["reqTime"] = str(int(time.time() * 1000))
-        payload["sign"] = self._sign(payload)  # sorted over the body sans sign
+    def _device_write_headers(self, encrypt=False):
+        # Header set captured from the app's /v3/device/* write requests.
         headers = {
             "token": self.token,
             "k-tenant": "philips",
-            "k-version": "4.11.0",
+            "k-version": "4.19.2",
+            "k-language": "en_US",
             "k-signv": "1.0.0",
-            "reqSource": "app",
-            "lang": "en_US",
-            "language": "en_US",
-            "timestamp": payload["reqTime"],
             "Content-Type": "application/json; charset=utf-8",
         }
-        url = f"https://api.idlespacetech.com{path}"
-        resp = requests.post(url, headers=headers, data=json.dumps(payload, separators=(",", ":")), timeout=15)
+        if encrypt:
+            headers["encrypt_data"] = "encrypt_data"
+        return headers
+
+    def _parse_device_response(self, resp):
         try:
             out = resp.json()
         except ValueError:
@@ -624,13 +614,54 @@ class PhilipsHomeAccessAPI:
             raise PhilipsSessionExpired("session_expired")
         return out
 
+    def _signed_device_request(self, path, payload):
+        """POST a plaintext write to a /v3/device/* endpoint on idlespacetech.
+
+        These endpoints (the set_lock_state family) sign the FULL body with the
+        sorted-key scheme (`_sign`), unlike the newer read endpoints. Verified by
+        reproducing the captured ble-add-key-list, remove-pwd, ble-remove-pwd-list
+        and update-key-nickname signatures byte-for-byte, then live end to end.
+        """
+        payload = dict(payload)
+        payload["reqTime"] = str(int(time.time() * 1000))
+        payload["sign"] = self._sign(payload)  # sorted over the body sans sign
+        resp = requests.post(
+            f"https://api.idlespacetech.com{path}",
+            headers=self._device_write_headers(),
+            data=json.dumps(payload, separators=(",", ":")),
+            timeout=15,
+        )
+        return self._parse_device_response(resp)
+
+    def _encrypted_device_request(self, path, payload):
+        """Encrypted write (insert-pwd): the sorted-signed payload is RSA-encrypted
+        with RSA_HEX_KEY and sent as {encryptData}, exactly like set_lock_state."""
+        from Crypto.PublicKey import RSA
+        from Crypto.Cipher import PKCS1_v1_5
+
+        payload = dict(payload)
+        payload["reqTime"] = str(int(time.time() * 1000))
+        payload["sign"] = self._sign(payload)
+        final_json = json.dumps(payload, separators=(",", ":")).encode()
+        enc_key = RSA.import_key(binascii.unhexlify(RSA_HEX_KEY))
+        cipher = PKCS1_v1_5.new(enc_key)
+        chunk = enc_key.size_in_bytes() - 11
+        blob = b"".join(cipher.encrypt(final_json[i:i + chunk]) for i in range(0, len(final_json), chunk))
+        resp = requests.post(
+            f"https://api.idlespacetech.com{path}",
+            headers=self._device_write_headers(encrypt=True),
+            json={"encryptData": base64.b64encode(blob).decode()},
+            timeout=15,
+        )
+        return self._parse_device_response(resp)
+
     def delete_key(self, esn, key_num, pwd_type=1):
         """Delete a credential (PIN/fingerprint) by its slot number.
 
-        Two targeted steps, both sorted-signed and byte-verified against the
-        captured working delete: the device removal then the registry removal.
-        Targeted by ``key_num`` — it cannot affect any other slot, so unlike
-        create there is no full-list-replace hazard.
+        Two targeted steps, both sorted-signed and verified live end to end: the
+        device removal then the registry removal. Targeted by ``key_num`` — it
+        cannot affect any other slot, so unlike create there is no full-list
+        hazard.
         """
         self._signed_device_request(
             self.APP_KEY_DELETE,
@@ -641,28 +672,66 @@ class PhilipsHomeAccessAPI:
             {"esn": esn, "pwdList": [{"pwdType": pwd_type, "num": int(key_num)}]},
         )
 
-    def create_pin(self, esn, name, pin, num=None):
-        """Create a numeric PIN credential.
+    @staticmethod
+    def _as_ble_key(entry, pwd_type, create_time):
+        """Map a key-list pwdList entry to the ble-add-key-list entry shape.
 
-        NOT IMPLEMENTED — but the blocker is now narrow. The write signing is
-        solved (sorted-key `_sign`, verified for ble-add-key-list /
-        update-key-nickname), so the cloud-registry side is reproducible. What
-        remains is the encrypted **device-programming** step
-        `POST /v3/device/insert-pwd` (`{encryptData: <RSA-encrypted>}`): its
-        ~351-byte plaintext schema is unconfirmed, and confirming it requires
-        live trials that write to a physical lock. Without it a "created" PIN
-        would register but not open the door. Also, `ble-add-key-list` is a
-        full-list REPLACE — a correct create must resend every existing entry
-        (reconstructed from key-list) plus the new one, and that reconstruction
-        can only be trusted once tested live. Left raising until both are
-        verified. See docs/reverse-engineering-notes.md.
+        createTime must be an int; key-list returns it as a string (or omits it),
+        so it is coerced. A re-date is harmless metadata; the window stays open.
         """
-        raise PhilipsAppApiUnavailable(
-            "Creating a PIN is not implemented: the encrypted /v3/device/insert-pwd "
-            "device-programming step is unconfirmed (a registry-only create would not "
-            "open the door), and ble-add-key-list is a full-list replace. See "
-            "docs/reverse-engineering-notes.md."
+        raw_ct = entry.get("createTime")
+        try:
+            ct = int(raw_ct)
+        except (TypeError, ValueError):
+            ct = create_time
+        return {
+            "pwdValue": entry.get("pwdValue"),
+            "pwdType": pwd_type,
+            "nickName": entry.get("nickName"),
+            "num": entry.get("num"),
+            "type": entry.get("type", 0),
+            "createTime": ct,
+            "startTime": 0,
+            "endTime": 0,
+        }
+
+    def create_pin(self, esn, name, pin, pwd_type=1):
+        """Create a numeric PIN credential. Verified live end to end.
+
+        Three steps, mirroring the app:
+          1. /v3/device/insert-pwd  -- encrypted device programming (the PIN value)
+          2. /v3/device/ble-add-key-list -- registry. This REPLACES the whole
+             credential list, so the current list is read and EVERY existing entry
+             is resent alongside the new one (a partial list would wipe the rest).
+          3. /v3/device/update-key-nickname -- sets the display name.
+        The new PIN takes the lowest free slot number.
+        """
+        pin = str(pin)
+        existing = (self.list_keys(esn).get("data") or {}).get("pwdList", [])
+        used = {p.get("num") for p in existing}
+        num = next(i for i in range(100) if i not in used)
+        now = int(time.time())
+
+        self._encrypted_device_request(
+            self.APP_KEY_INSERT,
+            {
+                "esn": esn, "num": num, "pwdValue": pin, "nickName": name,
+                "pwdType": pwd_type, "type": 0, "startTime": 0, "endTime": 0,
+            },
         )
+        entries = [self._as_ble_key(p, pwd_type, now) for p in existing]
+        entries.append(
+            {
+                "pwdValue": pin, "pwdType": pwd_type, "nickName": name, "num": num,
+                "type": 0, "createTime": now, "startTime": 0, "endTime": 0,
+            }
+        )
+        resp = self._signed_device_request(self.APP_KEY_CREATE, {"esn": esn, "pwdList": entries})
+        self._signed_device_request(
+            self.APP_KEY_NICKNAME,
+            {"esn": esn, "handMode": 0, "pwdType": pwd_type, "num": num, "nickname": name},
+        )
+        return resp
 
     # ---- Sharing management ------------------------------------------
 
