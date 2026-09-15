@@ -48,18 +48,21 @@ door is unlocked. The cloud's event codes aren't fully documented, so the entity
 exposes them raw (`event_code`, `event_type_code`, `event_source`, plus
 `pin_nickname` when a PIN was used) for automations to match on precisely.
 
-### Credential (PIN/fingerprint) listing
+### Credential (PIN/fingerprint) listing and deletion
 
-Credential listing works via `POST /v3/device/key-list` (returns `pwdList` for
-PINs and `fingerprintList` for fingerprints, among other types) — verified live.
+- **List** — `POST /v3/device/key-list` returns `pwdList` (PINs) and
+  `fingerprintList` (fingerprints), among other types. Verified live.
+- **Delete** — the `delete_credential` service removes a credential by its slot
+  number (`num` from the list). It's targeted (device + registry removal, both
+  signature-verified against the app's own request) and cannot affect any other
+  slot.
 
-**Creating and deleting** credentials are captured but deliberately **not wired
-to fire**: create ends in a full-list-replace plus an encrypted device step, and
-the write-endpoint signatures are unverified — a wrong request can wipe a lock's
-existing PINs (this happened once during testing and was restored). The
-`create_pin` / `delete_credential` services therefore return a clear error
-pointing at [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md),
-which documents the exact captured flows for a careful future implementation.
+**Creating** a PIN is not wired up: it ends in a full-list-replace (a wrong
+request wipes the other PINs — this happened once in testing and was restored)
+*and* an encrypted device-programming step whose payload isn't confirmed, so a
+"created" PIN might list but not open the door. `create_pin` returns a clear
+error; [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md)
+documents exactly what remains (the write signing itself is already solved).
 
 ### The `tools/` and `../android-re/` helpers
 

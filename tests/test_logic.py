@@ -157,6 +157,51 @@ def test_classify_real_records():
     assert event_mod._classify({"eventCode": 9, "pwdNickname": "Sam"}) == "pin_unlock"
 
 
+def test_delete_key_builds_targeted_two_step_request(monkeypatch):
+    """delete_key must send remove-pwd then ble-remove-pwd-list, each targeted by
+    the slot number (never a full list), on the idlespacetech host, sorted-signed.
+    """
+    import philips_home_access.api as apimod
+
+    calls = []
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"code": 200, "msg": "Success"}
+
+    def fake_post(url, headers=None, data=None, timeout=None):
+        calls.append((url, json.loads(data)))
+        return _R()
+
+    monkeypatch.setattr(apimod.requests, "post", fake_post)
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.token = "tok"
+    api.delete_key("ESN123", 2)
+
+    assert calls[0][0] == "https://api.idlespacetech.com/v3/device/remove-pwd"
+    assert calls[0][1]["params"]["keyNum"] == 2
+    assert calls[1][0] == "https://api.idlespacetech.com/v3/device/ble-remove-pwd-list"
+    assert calls[1][1]["pwdList"] == [{"pwdType": 1, "num": 2}]
+    # Both targeted (no full list) and both signed with reqTime.
+    for _, body in calls:
+        assert "sign" in body and "reqTime" in body
+
+
+def test_write_signature_is_sorted_keys():
+    """/v3/device/* writes sign the whole body with SORTED keys (the set_lock_state
+    family), distinct from the reads' insertion-order scheme."""
+    import json as _json
+
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    body = {"reqTime": "1", "esn": "E"}  # insertion order != sorted order
+    # _sign sorts; _sign_app does not — they must differ for an unsorted body.
+    assert api._sign(body) != api._sign_app(body)
+    # sorted canonical really is sorted (esn before reqTime)
+    assert _json.dumps(body, separators=(",", ":"), sort_keys=True) == '{"esn":"E","reqTime":"1"}'
+
+
 def test_activity_signature_canonical_form():
     """operation-list signs {esn, page, reqTime} as compact JSON in insertion
     order with page as an int. The exact field order and page's int-ness both

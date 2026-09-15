@@ -130,7 +130,7 @@ _CREATE_PIN_SCHEMA = vol.Schema(
     }
 )
 _DELETE_CREDENTIAL_SCHEMA = vol.Schema(
-    {vol.Required("esn"): cv.string, vol.Required("key_id"): cv.string}
+    {vol.Required("esn"): cv.string, vol.Required("num"): vol.Coerce(int)}
 )
 _ADD_SHARE_SCHEMA = vol.Schema(
     {
@@ -189,7 +189,7 @@ def _async_register_services(hass):
         await _run(call, "create_pin", "name", "pin")
 
     async def delete_credential(call: ServiceCall):
-        await _run(call, "delete_key", "key_id")
+        await _run(call, "delete_key", "num")
 
     async def add_share(call: ServiceCall):
         await _run(call, "add_share", "account")

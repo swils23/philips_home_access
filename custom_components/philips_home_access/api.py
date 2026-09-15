@@ -592,43 +592,75 @@ class PhilipsHomeAccessAPI:
             self.APP_KEY_LIST, {"esn": esn}, sign_fields=["esn", "reqTime"]
         )
 
-    def create_pin(self, esn, name, pin, num=None):
-        """Create a numeric PIN credential.
+    def _signed_device_request(self, path, payload):
+        """POST a plaintext write to a /v3/device/* endpoint on idlespacetech.
 
-        DELIBERATELY NOT IMPLEMENTED. The captured create flow is:
-          1. POST /v3/device/insert-pwd  -- {encryptData: <RSA-encrypted>}
-             (device programming; plaintext unknown, encrypted with the public key)
-          2. POST /v3/device/ble-add-key-list -- {esn, sign, reqTime, pwdList:[...]}
-             where pwdList is the ENTIRE credential list; sending only the new
-             entry REPLACES the list and wipes every existing PIN (observed live).
-          3. POST /v3/device/update-key-nickname -- sets the name.
-        The write-endpoint signatures also use a canonical this code has not
-        reproduced. Firing any of this half-right can silently destroy a user's
-        physical-lock PINs, so it raises until captured and verified end to end.
-        See docs/reverse-engineering-notes.md.
+        These endpoints (the set_lock_state family) sign the FULL body with the
+        sorted-key scheme (`_sign`), unlike the newer read endpoints. Verified by
+        reproducing captured signatures for ble-add-key-list, remove-pwd,
+        ble-remove-pwd-list and update-key-nickname byte-for-byte.
         """
-        raise PhilipsAppApiUnavailable(
-            "Creating a PIN is not implemented: it is a multi-step flow ending in a "
-            "full-list replace plus an encrypted device-programming step, and firing "
-            "it unverified can wipe the lock's existing PINs. See "
-            "docs/reverse-engineering-notes.md."
-        )
+        payload = dict(payload)
+        payload["reqTime"] = str(int(time.time() * 1000))
+        payload["sign"] = self._sign(payload)  # sorted over the body sans sign
+        headers = {
+            "token": self.token,
+            "k-tenant": "philips",
+            "k-version": "4.11.0",
+            "k-signv": "1.0.0",
+            "reqSource": "app",
+            "lang": "en_US",
+            "language": "en_US",
+            "timestamp": payload["reqTime"],
+            "Content-Type": "application/json; charset=utf-8",
+        }
+        url = f"https://api.idlespacetech.com{path}"
+        resp = requests.post(url, headers=headers, data=json.dumps(payload, separators=(",", ":")), timeout=15)
+        try:
+            out = resp.json()
+        except ValueError:
+            return {"code": resp.status_code, "msg": "non_json_response", "text": resp.text[:300]}
+        if isinstance(out, dict) and str(out.get("code")) == "444":
+            raise PhilipsSessionExpired("session_expired")
+        return out
 
     def delete_key(self, esn, key_num, pwd_type=1):
         """Delete a credential (PIN/fingerprint) by its slot number.
 
-        DELIBERATELY NOT IMPLEMENTED. The captured delete flow is targeted (safer
-        than create) but its signatures are unverified:
-          1. POST /v3/device/remove-pwd -- {esn, sign, reqTime,
-             params:{partsSn, partsMac, keyNum, keyType}}
-          2. POST /v3/device/ble-remove-pwd-list -- {esn, sign, reqTime,
-             pwdList:[{pwdType, num}]}
-        Left guarded so a wrong request can't affect a physical lock's PINs. See
-        docs/reverse-engineering-notes.md.
+        Two targeted steps, both sorted-signed and byte-verified against the
+        captured working delete: the device removal then the registry removal.
+        Targeted by ``key_num`` — it cannot affect any other slot, so unlike
+        create there is no full-list-replace hazard.
+        """
+        self._signed_device_request(
+            self.APP_KEY_DELETE,
+            {"esn": esn, "params": {"partsSn": "", "partsMac": "", "keyNum": int(key_num), "keyType": 0}},
+        )
+        return self._signed_device_request(
+            self.APP_KEY_DELETE_LIST,
+            {"esn": esn, "pwdList": [{"pwdType": pwd_type, "num": int(key_num)}]},
+        )
+
+    def create_pin(self, esn, name, pin, num=None):
+        """Create a numeric PIN credential.
+
+        NOT IMPLEMENTED — but the blocker is now narrow. The write signing is
+        solved (sorted-key `_sign`, verified for ble-add-key-list /
+        update-key-nickname), so the cloud-registry side is reproducible. What
+        remains is the encrypted **device-programming** step
+        `POST /v3/device/insert-pwd` (`{encryptData: <RSA-encrypted>}`): its
+        ~351-byte plaintext schema is unconfirmed, and confirming it requires
+        live trials that write to a physical lock. Without it a "created" PIN
+        would register but not open the door. Also, `ble-add-key-list` is a
+        full-list REPLACE — a correct create must resend every existing entry
+        (reconstructed from key-list) plus the new one, and that reconstruction
+        can only be trusted once tested live. Left raising until both are
+        verified. See docs/reverse-engineering-notes.md.
         """
         raise PhilipsAppApiUnavailable(
-            "Deleting a credential is not implemented: the captured remove-pwd / "
-            "ble-remove-pwd-list signatures are unverified. See "
+            "Creating a PIN is not implemented: the encrypted /v3/device/insert-pwd "
+            "device-programming step is unconfirmed (a registry-only create would not "
+            "open the door), and ble-add-key-list is a full-list replace. See "
             "docs/reverse-engineering-notes.md."
         )
 

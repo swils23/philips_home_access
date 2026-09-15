@@ -143,14 +143,26 @@ Delete is targeted (safer):
 2. `POST /v3/device/ble-remove-pwd-list` — `{esn, sign, reqTime, pwdList:[{pwdType,
    num}]}`.
 
-These **write** endpoints' signatures use a canonical that reproducing the
-captured `operation-list`/`key-list` signatures did NOT match (tried
-`{esn,reqTime}`, `{esn,reqTime,<body>}`, `{esn,<body>,reqTime}`), so the exact
-signed form is unconfirmed. Given the full-list-replace hazard, the encrypted
-`insert-pwd` step, and the unverified signatures, `create_pin`/`delete_key` raise
-rather than fire — implementing them wrong can destroy a lock's PINs. Finish by
-reproducing a captured write signature byte-for-byte first, and make create merge
-with the current list.
+**Write signing is solved.** These `/v3/device/*` endpoints (on
+`api.idlespacetech.com`, the `set_lock_state` family — *not* the newer
+homeaccesstech reads) sign the **whole body with SORTED keys** — the integration's
+existing `_sign`, not the reads' insertion-order `_sign_app`. Reproduced the
+captured `ble-add-key-list`, `remove-pwd`, `ble-remove-pwd-list` and
+`update-key-nickname` signatures byte-for-byte.
+
+- **`delete_key` is implemented and functional**: `remove-pwd` (device, plaintext)
+  then `ble-remove-pwd-list` (registry), both targeted by the slot number — it
+  cannot touch any other slot, so it needed no destructive live test.
+- **`create_pin` still raises.** Two things remain, and both need writes to a
+  physical lock to confirm: (1) the encrypted device step
+  `POST /v3/device/insert-pwd` — `{encryptData}` wrapping a sorted-signed payload
+  (like `set_lock_state`) whose ~351-byte (3 RSA block) field schema is
+  unconfirmed; a registry-only create (skipping it) would list a PIN that does
+  not open the door. (2) `ble-add-key-list` is a full-list REPLACE, so create must
+  resend every existing entry (reconstructed from `key-list`, which omits
+  `createTime`/`startTime`/`endTime`) plus the new one — trustworthy only once
+  tested live. A careful live trial on a free slot (never including existing
+  entries, cleaned up after) is the way to finish it.
 
 ### How the capture was done
 

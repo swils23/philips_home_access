@@ -29,20 +29,23 @@ create_pin:
 delete_credential:
   name: Delete credential
   description: >
-    Delete a credential (PIN or fingerprint) by its id. Only deletes the id you
-    pass; existing credentials are untouched.
+    Delete a PIN/credential by its slot number. Targeted — only the slot you
+    pass is removed; every other credential is untouched.
   fields:
     esn:
       name: Lock serial (wifiSN)
       required: true
       selector:
         text:
-    key_id:
-      name: Credential id
-      description: The credential's id, from the lock's credential list.
+    num:
+      name: Slot number
+      description: The credential's slot number (num) from the lock's credential list.
       required: true
       selector:
-        text:
+        number:
+          min: 0
+          max: 99
+          mode: box
 
 add_share:
   name: Share lock
