@@ -48,16 +48,18 @@ door is unlocked. The cloud's event codes aren't fully documented, so the entity
 exposes them raw (`event_code`, `event_type_code`, `event_source`, plus
 `pin_nickname` when a PIN was used) for automations to match on precisely.
 
-### Credential (PIN/fingerprint) services
+### Credential (PIN/fingerprint) listing
 
-`create_pin` and `delete_credential` services, plus credential listing via
-`POST /v3/device/key-list` (returns `pwdList` for PINs and `fingerprintList` for
-fingerprints, among other types). Listing is verified live; **creating and
-deleting** use inferred endpoints not yet captured (they change the physical
-lock), so confirm those from a capture before relying on them — see
-[`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md).
-`delete_credential` only removes the id you pass; existing credentials are left
-alone.
+Credential listing works via `POST /v3/device/key-list` (returns `pwdList` for
+PINs and `fingerprintList` for fingerprints, among other types) — verified live.
+
+**Creating and deleting** credentials are captured but deliberately **not wired
+to fire**: create ends in a full-list-replace plus an encrypted device step, and
+the write-endpoint signatures are unverified — a wrong request can wipe a lock's
+existing PINs (this happened once during testing and was restored). The
+`create_pin` / `delete_credential` services therefore return a clear error
+pointing at [`docs/reverse-engineering-notes.md`](docs/reverse-engineering-notes.md),
+which documents the exact captured flows for a careful future implementation.
 
 ### The `tools/` and `../android-re/` helpers
 
@@ -160,9 +162,3 @@ logger:
   logs:
     custom_components.philips_home_access: debug
 ```
-
-## Support
-
-If this integration helped you, consider supporting development:
-
-[![Buy Me A Coffee](https://www.buymeacoffee.com/assets/img/custom_images/yellow_img.png)](https://buymeacoffee.com/rjbogz)

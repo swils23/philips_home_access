@@ -477,9 +477,18 @@ class PhilipsHomeAccessAPI:
     APP_SHARE_ADD = "/wifi/share/add"
     APP_SHARE_DEL = "/wifi/share/del"
     APP_SHARE_RENAME = "/wifi/share/updatenickname"
-    # Inferred, not yet captured:
-    APP_KEY_CREATE = "/v3/device/key-add"
-    APP_KEY_DELETE = "/v3/device/key-del"
+    # Credential create/delete were captured but are NOT wired to fire: create is
+    # a multi-step flow ending in a FULL-LIST-REPLACE (/v3/device/ble-add-key-list
+    # with the entire pwdList — sending a partial list wipes the others) plus an
+    # RSA-encrypted device-programming step (/v3/device/insert-pwd) whose plaintext
+    # is unknown, and the write-endpoint signatures use a canonical this code has
+    # not reproduced. Delete is /v3/device/remove-pwd (targeted by keyNum) +
+    # /v3/device/ble-remove-pwd-list (targeted by num). See the RE notes; both are
+    # left guarded so a wrong request can't damage a physical lock's PINs.
+    APP_KEY_CREATE = "/v3/device/ble-add-key-list"
+    APP_KEY_INSERT = "/v3/device/insert-pwd"
+    APP_KEY_DELETE = "/v3/device/remove-pwd"
+    APP_KEY_DELETE_LIST = "/v3/device/ble-remove-pwd-list"
 
     def _app_request(self, path, body, sign_fields=None):
         """POST to an "/app/*" endpoint with the app's signing convention.
@@ -586,21 +595,41 @@ class PhilipsHomeAccessAPI:
     def create_pin(self, esn, name, pin, num=None):
         """Create a numeric PIN credential.
 
-        Endpoint/body inferred from the "/v3/device/key-*" family and the
-        key-list record shape (nickName + pwdValue + num); not yet captured, so
-        confirm against a real add-PIN capture before relying on it.
+        DELIBERATELY NOT IMPLEMENTED. The captured create flow is:
+          1. POST /v3/device/insert-pwd  -- {encryptData: <RSA-encrypted>}
+             (device programming; plaintext unknown, encrypted with the public key)
+          2. POST /v3/device/ble-add-key-list -- {esn, sign, reqTime, pwdList:[...]}
+             where pwdList is the ENTIRE credential list; sending only the new
+             entry REPLACES the list and wipes every existing PIN (observed live).
+          3. POST /v3/device/update-key-nickname -- sets the name.
+        The write-endpoint signatures also use a canonical this code has not
+        reproduced. Firing any of this half-right can silently destroy a user's
+        physical-lock PINs, so it raises until captured and verified end to end.
+        See docs/reverse-engineering-notes.md.
         """
-        body = {"esn": esn, "nickName": name, "pwdValue": pin}
-        if num is not None:
-            body["num"] = int(num)
-        return self._app_request(self.APP_KEY_CREATE, body, sign_fields=["esn", "reqTime"])
+        raise PhilipsAppApiUnavailable(
+            "Creating a PIN is not implemented: it is a multi-step flow ending in a "
+            "full-list replace plus an encrypted device-programming step, and firing "
+            "it unverified can wipe the lock's existing PINs. See "
+            "docs/reverse-engineering-notes.md."
+        )
 
-    def delete_key(self, esn, key_id):
-        """Delete a credential (PIN or fingerprint) by its _id (inferred)."""
-        return self._app_request(
-            self.APP_KEY_DELETE,
-            {"esn": esn, "_id": key_id},
-            sign_fields=["esn", "reqTime"],
+    def delete_key(self, esn, key_num, pwd_type=1):
+        """Delete a credential (PIN/fingerprint) by its slot number.
+
+        DELIBERATELY NOT IMPLEMENTED. The captured delete flow is targeted (safer
+        than create) but its signatures are unverified:
+          1. POST /v3/device/remove-pwd -- {esn, sign, reqTime,
+             params:{partsSn, partsMac, keyNum, keyType}}
+          2. POST /v3/device/ble-remove-pwd-list -- {esn, sign, reqTime,
+             pwdList:[{pwdType, num}]}
+        Left guarded so a wrong request can't affect a physical lock's PINs. See
+        docs/reverse-engineering-notes.md.
+        """
+        raise PhilipsAppApiUnavailable(
+            "Deleting a credential is not implemented: the captured remove-pwd / "
+            "ble-remove-pwd-list signatures are unverified. See "
+            "docs/reverse-engineering-notes.md."
         )
 
     # ---- Sharing management ------------------------------------------

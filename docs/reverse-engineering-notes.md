@@ -121,10 +121,36 @@ signing was cross-checked by reproducing a captured `function-List` signature an
 the captured `operation-list` / `key-list` signatures byte-for-byte
 (see `tests/test_logic.py::test_activity_signature_matches_captured`).
 
-**Not yet captured:** creating/deleting a credential (would change the physical
-lock). `create_pin`/`delete_key` use inferred `/v3/device/key-add` / `key-del`
-paths and the `key-list` record field names; confirm from a real add/delete
-capture before relying on them.
+**Credential create/delete: captured, but deliberately NOT wired to fire.**
+Captured live by adding and removing a test PIN (a permanent PIN, `pwdType: 1`):
+
+Create is three steps:
+1. `POST /v3/device/insert-pwd` — `{encryptData: <RSA-encrypted>}`, the device-
+   programming step (encrypted with the public key like `set_lock_state`;
+   plaintext unknown).
+2. `POST /v3/device/ble-add-key-list` — `{esn, sign, reqTime, pwdList: [...]}`
+   where `pwdList` is the **entire** credential list (`{pwdValue, pwdType,
+   nickName, num, type, createTime, startTime, endTime}`). **This is a full-list
+   replace**: sending only the new entry wipes every existing PIN — observed live
+   (a test add reduced three PINs to one). A correct create MUST read the current
+   list and send existing + new together.
+3. `POST /v3/device/update-key-nickname` — `{esn, handMode, pwdType, num, sign,
+   reqTime, nickname}`, sets the name.
+
+Delete is targeted (safer):
+1. `POST /v3/device/remove-pwd` — `{esn, sign, reqTime, params:{partsSn, partsMac,
+   keyNum, keyType}}`.
+2. `POST /v3/device/ble-remove-pwd-list` — `{esn, sign, reqTime, pwdList:[{pwdType,
+   num}]}`.
+
+These **write** endpoints' signatures use a canonical that reproducing the
+captured `operation-list`/`key-list` signatures did NOT match (tried
+`{esn,reqTime}`, `{esn,reqTime,<body>}`, `{esn,<body>,reqTime}`), so the exact
+signed form is unconfirmed. Given the full-list-replace hazard, the encrypted
+`insert-pwd` step, and the unverified signatures, `create_pin`/`delete_key` raise
+rather than fire — implementing them wrong can destroy a lock's PINs. Finish by
+reproducing a captured write signature byte-for-byte first, and make create merge
+with the current list.
 
 ### How the capture was done
 
