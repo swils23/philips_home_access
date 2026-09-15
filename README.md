@@ -98,7 +98,7 @@ Let me know if your lock works or help me add support it.
 1. Open HACS in Home Assistant
 2. Go to **Integrations**
 3. Click the three-dot menu → **Custom repositories**
-4. Add this repository: https://github.com/rjbogz/philips_home_access
+4. Add this repository: https://github.com/swils23/philips_home_access
 5. Select category: **Integration**
 6. Click **Install**
 7. Restart Home Assistant
