@@ -55,12 +55,12 @@ Full PIN CRUD, verified live end to end:
 - **List** — `POST /v3/device/key-list` returns `pwdList` (PINs) and
   `fingerprintList` (fingerprints), among other types.
 - **Create** — `create_pin` service adds a numeric PIN (`insert-pwd` device
-  programming + `ble-add-key-list` registry + `update-key-nickname`). It reads
-  the current PIN list and resends it with the new entry, so existing PINs are
-  preserved, and the new PIN takes the lowest free slot. **Note:** the registry
-  step replaces the whole credential set, so to avoid wiping fingerprints/faces
-  (which can't be re-enrolled remotely) `create_pin` refuses on locks that have
-  any non-PIN credentials until that case is supported.
+  programming + `ble-add-key-list` registry + `update-key-nickname`). The registry
+  step replaces the whole credential set as one list, so create reads the current
+  PINs **and fingerprints** and resends them all (PINs and fingerprints are
+  distinguished by a type code) plus the new PIN — nothing is wiped. The new PIN
+  takes the lowest free slot. Create still refuses on locks with credential types
+  not yet supported (faces, cards, etc.) rather than wipe them.
 - **Delete** — `delete_credential` service removes a credential by its slot
   number (`num` from the list). Targeted — it cannot affect any other slot.
 

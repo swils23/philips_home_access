@@ -230,6 +230,55 @@ def test_create_pin_flow_and_createtime_is_int(monkeypatch):
         assert isinstance(e["createTime"], int)          # coerced from string
 
 
+def test_create_pin_preserves_fingerprints(monkeypatch):
+    """ble-add-key-list replaces the whole credential set, so create_pin must
+    resend existing fingerprints (pwdType 2) alongside the PINs, or they're wiped.
+    """
+    import philips_home_access.api as apimod
+
+    posts = []
+
+    class _R:
+        status_code = 200
+
+        def json(self):
+            return {"code": 200, "msg": "Success"}
+
+    def fake_post(url, headers=None, data=None, json=None, timeout=None):
+        posts.append((url, json if json is not None else globals()["json"].loads(data)))
+        return _R()
+
+    monkeypatch.setattr(apimod.requests, "post", fake_post)
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.token = "tok"
+    monkeypatch.setattr(api, "list_keys", lambda esn: {"data": {
+        "pwdList": [{"num": 1, "nickName": "A", "pwdValue": "0000", "type": 0, "createTime": "1700000000"}],
+        "fingerprintList": [{"num": 0, "nickName": "Finger", "type": 3, "createTime": "1700000000", "items": [0]}],
+    }})
+    api.create_pin("ESN", "Guest", "0007")
+
+    ble = next(b for u, b in posts if u.endswith("/v3/device/ble-add-key-list"))
+    by_type = {}
+    for e in ble["pwdList"]:
+        by_type.setdefault(e["pwdType"], []).append(e)
+    assert len(by_type[1]) == 2                       # existing PIN + new PIN
+    assert len(by_type[2]) == 1                        # the fingerprint, preserved
+    fp = by_type[2][0]
+    assert fp["items"] == [0] and isinstance(fp["createTime"], int)
+
+
+def test_create_pin_refuses_unsupported_credentials(monkeypatch):
+    """Credential types create can't round-trip yet (faces/cards) still refuse."""
+    from philips_home_access.api import PhilipsAppApiUnavailable
+
+    api = PhilipsHomeAccessAPI("u", "p", "PhilipsNorthAmerica")
+    api.token = "tok"
+    monkeypatch.setattr(api, "list_keys", lambda esn: {"data": {
+        "pwdList": [], "faceList": [{"num": 0}]}})
+    with pytest.raises(PhilipsAppApiUnavailable):
+        api.create_pin("ESN", "n", "0007")
+
+
 def test_write_signature_is_sorted_keys():
     """/v3/device/* writes sign the whole body with SORTED keys (the set_lock_state
     family), distinct from the reads' insertion-order scheme."""

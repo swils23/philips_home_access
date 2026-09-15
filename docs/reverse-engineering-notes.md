@@ -167,14 +167,24 @@ and use headers `k-tenant: philips`, `k-version: 4.19.2`, `k-language: en_US`,
   The new PIN takes the lowest free slot. Verified: create adds the PIN and keeps
   every existing PIN; delete removes only that slot.
 
-**`ble-add-key-list` replaces the WHOLE credential set, not just PINs.** When the
-app created the first test PIN (sending only `pwdList`), the lock's three
+**`ble-add-key-list` replaces the WHOLE credential set via one unified list.**
+When the app created the first test PIN (sending only `pwdList`), the lock's three
 **fingerprints** were cleared too (`fingerprintList` 3 → 0 in the same step) — the
-endpoint drops every credential type not present in the request. Fingerprints and
-faces can only be re-enrolled physically, so `create_pin` **refuses** when the
-lock has any non-PIN credentials rather than destroy them: making create safe on
-such locks requires resending `fingerprintList`/`cardList`/etc. in the ble-add
-call, whose entry shapes are not yet captured. Delete is unaffected (targeted).
+endpoint drops every credential not in the request. The request does NOT take a
+separate `fingerprintList` field (sending one is ignored); instead everything
+goes in **`pwdList`**, distinguished by `pwdType`: **1 = PIN** (carries
+`pwdValue`), **2 = fingerprint** (carries `items`, its device template slot,
+instead of a value). PINs and fingerprints have independent `num` spaces, so a PIN
+and a fingerprint can share a `num`. Verified live: a `pwdType: 2` entry appears in
+`fingerprintList`, no junk PIN.
+
+So `create_pin` reads the current PINs and fingerprints and resends them all
+(PINs as pwdType 1, fingerprints as pwdType 2) plus the new PIN — nothing is
+wiped. It still refuses only for credential types whose ble-add shape is
+unconfirmed (faces, cards, offline/time PINs, palm). Delete is unaffected
+(targeted). Note: whether a *restored* fingerprint physically opens the door
+depends on the device biometric template still existing at its `items` slot —
+the registry entry alone doesn't re-create a template.
 
 ### How the capture was done
 

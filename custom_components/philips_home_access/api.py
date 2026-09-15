@@ -695,40 +695,63 @@ class PhilipsHomeAccessAPI:
             "endTime": 0,
         }
 
+    @staticmethod
+    def _as_ble_fingerprint(entry, create_time):
+        """Map a key-list fingerprintList entry to its ble-add-key-list shape.
+
+        In the ble-add unified pwdList, a fingerprint is an entry with
+        ``pwdType`` 2 (PINs are 1) carrying ``items`` (its device template slot)
+        instead of ``pwdValue``. createTime is coerced to int.
+        """
+        raw_ct = entry.get("createTime")
+        try:
+            ct = int(raw_ct)
+        except (TypeError, ValueError):
+            ct = create_time
+        return {
+            "pwdType": 2,
+            "nickName": entry.get("nickName"),
+            "num": entry.get("num"),
+            "type": entry.get("type", 0),
+            "createTime": ct,
+            "startTime": 0,
+            "endTime": 0,
+            "items": entry.get("items", [entry.get("num", 0)]),
+        }
+
+    # Credential types this code can round-trip into ble-add-key-list. PINs and
+    # fingerprints are known; the rest would be silently wiped by the full-list
+    # replace, so create refuses when they are present rather than destroy them.
+    _UNSUPPORTED_CRED_LISTS = ("faceList", "cardList", "offlinePwdList", "timePwdList", "palmList")
+
     def create_pin(self, esn, name, pin, pwd_type=1):
         """Create a numeric PIN credential. Verified live end to end.
 
         Three steps, mirroring the app:
           1. /v3/device/insert-pwd  -- encrypted device programming (the PIN value)
-          2. /v3/device/ble-add-key-list -- registry. This REPLACES the whole
-             credential list, so the current list is read and EVERY existing entry
-             is resent alongside the new one (a partial list would wipe the rest).
+          2. /v3/device/ble-add-key-list -- registry, a full-list REPLACE across
+             ALL credential types (one unified pwdList: PINs pwdType 1,
+             fingerprints pwdType 2). The current PINs and fingerprints are read
+             and resent with the new PIN so nothing is wiped.
           3. /v3/device/update-key-nickname -- sets the display name.
-        The new PIN takes the lowest free slot number.
+        The new PIN takes the lowest free PIN slot. If the lock has credential
+        types this code can't round-trip yet (faces, cards, ...), it refuses
+        rather than wipe them.
         """
         pin = str(pin)
         data = self.list_keys(esn).get("data") or {}
-        existing = data.get("pwdList", [])
-        # SAFETY: ble-add-key-list replaces the WHOLE credential set — sending only
-        # pwdList clears fingerprints/cards/faces. Those (fingerprints especially)
-        # can only be re-enrolled physically, so refuse rather than destroy them.
-        # Resending the other lists is not supported here (their ble-add shape is
-        # unconfirmed), so create is limited to locks whose only credentials are
-        # PINs. See docs/reverse-engineering-notes.md.
-        other = {
-            k: v for k in ("fingerprintList", "faceList", "cardList",
-                           "offlinePwdList", "timePwdList", "palmList")
-            if (v := data.get(k))
-        }
-        if other:
+        pins = data.get("pwdList", [])
+        fingerprints = data.get("fingerprintList", [])
+        unsupported = {k: v for k in self._UNSUPPORTED_CRED_LISTS if (v := data.get(k))}
+        if unsupported:
             raise PhilipsAppApiUnavailable(
-                "Refusing to create a PIN: the ble-add-key-list registry step would "
-                "wipe this lock's other credentials ("
-                + ", ".join(f"{k}={len(v)}" for k, v in other.items())
-                + "), which for fingerprints/faces cannot be restored remotely. See "
-                "docs/reverse-engineering-notes.md."
+                "Refusing to create a PIN: the registry step would wipe credential "
+                "types this integration can't preserve yet ("
+                + ", ".join(f"{k}={len(v)}" for k, v in unsupported.items())
+                + "). See docs/reverse-engineering-notes.md."
             )
-        used = {p.get("num") for p in existing}
+
+        used = {p.get("num") for p in pins}
         num = next(i for i in range(100) if i not in used)
         now = int(time.time())
 
@@ -739,7 +762,9 @@ class PhilipsHomeAccessAPI:
                 "pwdType": pwd_type, "type": 0, "startTime": 0, "endTime": 0,
             },
         )
-        entries = [self._as_ble_key(p, pwd_type, now) for p in existing]
+        # One unified list: existing PINs + existing fingerprints + the new PIN.
+        entries = [self._as_ble_key(p, pwd_type, now) for p in pins]
+        entries += [self._as_ble_fingerprint(f, now) for f in fingerprints]
         entries.append(
             {
                 "pwdValue": pin, "pwdType": pwd_type, "nickName": name, "num": num,
