@@ -24,7 +24,7 @@ Let me know if your lock works or help me add support it.
 
 ## Notes
 
-- You can not be logged in to the Philips Home Access app and this integration at the same time. Logging in to one will sign you out of the other.
+- You can not be logged in to the Philips Home Access app and this integration with the same account at the same time. Logging in to one will sign you out of the other. To use both, see [Using a shared account](#using-a-shared-account).
 - I have only added basic sensors for this, but I'm open to adding more support (getting other data about the lock, adjusting settings, etc.)
 - This integration is a work in progress. I only have 1 lock so my testing was limited.
 - The polling interval can be changed later from the integration's menu in Home Assistant.
@@ -61,6 +61,24 @@ Let me know if your lock works or help me add support it.
 - Region
 
 4. Click Submit
+
+---
+
+## Using a shared account
+
+Each account can only have one active session, so signing in to the app logs
+Home Assistant out (and vice versa). To keep using the app on your phone:
+
+1. Create a second Philips Home Access account (e.g. a dedicated email for Home Assistant).
+2. In the app, on your main account, share the lock with that second account.
+3. Configure this integration with the second account.
+
+Shared locks are discovered and controlled the same way as owned ones — lock,
+unlock, status and sensors all work — and your main account's app session stays
+signed in.
+
+If your account doesn't show up under `PhilipsNorthAmerica`, try
+`PhilipsNorthAmericaNew`.
 
 ---
 
